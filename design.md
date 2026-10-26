@@ -1,6 +1,6 @@
-# Goom Invoice: Invoicing & Payments App. Design Document (V1)
+﻿# Goom Invoice: Invoicing & Payments App. Design Document (V1)
 
-> Replace `APP_NAME` everywhere once you pick a name. This file is the single source of truth.
+> This file is the single source of truth for Goom Invoice.
 > Antigravity: read this file fully before every task. Do not deviate from it. If something is
 > unclear or missing, STOP and ask instead of guessing.
 > This is a NEW project in its own folder. Do not mix it with the booking-system repo.
@@ -123,7 +123,7 @@ with rate limits and a spending cap. The LLM never sends or pays anything.
 
 ### Repository layout
 ```
-APP_NAME/
+Goom Invoice/
   design.md
   prompts.md
   README.md
@@ -177,7 +177,6 @@ Frontend:
 ```
 VITE_API_URL=            # e.g. https://<service>.onrender.com/api/v1  (no trailing slash)
 VITE_APP_NAME=
-VITE_DEMO_MODE=          # true|false — shows/hides the "View live demo" button and /demo route
 ```
 Never commit `.env`. Provide `.env.example` with names only.
 
@@ -360,6 +359,7 @@ Malformed JSON returns 400 `INVALID_JSON`. Validation errors return 422 with fie
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | GET | `/health` (at root) | none | Includes database check |
+| GET | `/config` | none | Returns `{ demoMode: boolean }`. No secrets. The frontend reads this at runtime to show/hide the demo CTA, /demo route, demo checkout link, and test-mode banner. |
 | POST | `/auth/register` | none | Creates user + business in one transaction; rate-limited |
 | POST | `/auth/login` | none | Generic 401 on failure; rate-limited |
 | GET | `/auth/me` | owner | Returns user and business |
@@ -382,8 +382,8 @@ Malformed JSON returns 400 `INVALID_JSON`. Validation errors return 422 with fie
 | GET | `/public/invoices/:token` | none | Sanitised invoice; only status sent/paid/void; rate-limited |
 | GET | `/public/invoices/:token/status` | none | Small payload for polling |
 | GET | `/public/invoices/:token/pdf` | none | PDF |
-| POST | `/public/invoices/:token/pay` | none | Body `{ payerEmail?: string; payerFirstName?: string; payerLastName?: string; provider?: string }`. The server picks the active provider from `PAYMENT_PROVIDERS[0]` unless `provider` is supplied and is in the enabled list. For Chapa: if the invoice's client has a stored email it is used; otherwise `payerEmail` is required and validated. Payer data is forwarded to the provider and never stored or logged. Returns `{ checkoutUrl: string }` |
-| POST | `/auth/demo` | none | `DEMO_MODE=true` only. Rate-limited (5 req/15 min per IP). Returns a short-lived JWT (same 1 h) for the demo account. No body required. Used by the "View live demo" CTA on the landing page. |
+| POST | `/public/invoices/:token/pay` | none | Body `{ payerEmail?: string; payerFirstName?: string; payerLastName?: string; provider?: string }`. The server picks the active provider from `PAYMENT_PROVIDERS[0]` unless `provider` is supplied and is in the enabled list. For Chapa: if the invoice's client has a stored email it is used; otherwise `payerEmail` is required and validated. Payer data is forwarded to the provider and never stored or logged. Returns `{ checkoutUrl: string; demoCheckoutUrl?: string }` — `demoCheckoutUrl` is present only when `DEMO_MODE=true`. |
+| POST | `/auth/demo` | none | `DEMO_MODE=true` only; returns 404 when `DEMO_MODE=false`. Rate-limited (~20 req/15 min per IP). Returns a 1-hour JWT for the demo account. No body required. Used by the `/demo` frontend route and the "View live demo" CTA. |
 | POST | `/webhooks/chapa` | signature | Raw body; see section 9 |
 | POST | `/webhooks/simulated` | signature | Same code path; demo mode only |
 | POST | `/demo/simulated/:txRef/complete` | none, demo mode only | Server signs and posts a webhook to itself |
@@ -472,7 +472,7 @@ interface PaymentProvider {
 - Official docs: https://developer.chapa.co. Antigravity must read the current docs before coding.
   **Do not guess or hardcode endpoint paths, field names, header names, or event-type strings.**
   If the docs are inaccessible, stop and ask the owner to paste the relevant pages.
-- Confirmed facts (verified 2026-10-25 from developer.chapa.co):
+- **Unverified notes from web search; confirm against developer.chapa.co pages the owner pastes:**
   - Initialize: `POST https://api.chapa.co/v1/transaction/initialize`. Required body fields: `amount`
     (decimal string), `currency` (ETB|USD), `email`, `tx_ref`. Optional: `first_name`, `last_name`,
     `phone_number`, `return_url`, `customization.*`.
@@ -568,8 +568,8 @@ Boundaries:
   --surface-2: #F4F4F6;
 
   /* brand and status */
-  --blue-600: #1F6FFF;     /* links, focus rings, decorative accents. NOT for button fills (contrast 3.76:1, fails WCAG AA) */
-  --blue-700: #1A5FE0;     /* ALL filled blue button backgrounds (contrast 4.67:1, passes WCAG AA on white) */
+  --blue-600: #1F6FFF;     /* links, focus rings, decorative accents. NOT for button fills (verify with a contrast checker; approx 4.4:1 on white, below the 4.5:1 WCAG AA threshold) */
+  --blue-700: #1A5FE0;     /* ALL filled blue button backgrounds (verify with a contrast checker; approx 5.6:1 on white, passes WCAG AA) */
   --blue-50:  #EAF1FF;
   --green-500: #10B981;  --green-50: #ECFDF5;   /* paid */
   --amber-500: #F59E0B;  --amber-50: #FFFBEB;   /* pending / due soon */
@@ -610,7 +610,7 @@ The theme choice is stored in `localStorage` and applied before first paint (inl
 |---|---|---|
 | `/` | Landing | Dark hero, bento features, how it works, "built for correctness" strip, footer |
 | `/login`, `/register` | Auth | Split layout: dark panel with floating cards on the left; form on the right (stacked on mobile) |
-| `/demo` | Demo redirect | Calls `POST /auth/demo`, stores the returned JWT, and navigates to `/app`. `DEMO_MODE` only; returns 404 in production. |
+| `/demo` | Demo redirect | Calls `POST /auth/demo`, stores the returned JWT, and navigates to `/app`. Only rendered when `GET /config` returns `{ demoMode: true }`; the route is absent (not just hidden) otherwise. |
 | `/app` | Dashboard | Greeting, currency balance cards, quick actions, revenue chart, activity feed |
 | `/app/invoices` | Invoice list | Status tabs, search, table on desktop / cards on mobile |
 | `/app/invoices/new`, `/app/invoices/:id/edit` | Editor | Form + live preview (desktop two columns; mobile single column with sticky total bar) |
@@ -631,7 +631,7 @@ The theme choice is stored in `localStorage` and applied before first paint (inl
    - Sub: `Create professional invoices, share a secure link, and watch payments confirm themselves.`
    - CTAs: `Create free account` (blue pill, -> `/register`), `View live demo` (outlined pill, -> `/demo`).
      `/demo` calls `POST /auth/demo` (DEMO_MODE only), receives a JWT, and navigates to `/app`.
-     If DEMO_MODE is false, the button is hidden entirely (not greyed out).
+     If `GET /config` returns `{ demoMode: false }`, the button is hidden entirely (not greyed out).
    - Right side: floating UI cards that gently drift (6 to 8 second ease loops): an invoice card
      (`INV-0007`, amount, "Sent" chip), a "Payment received" notification with a green dot, and a small
      two-currency balance card (ETB and USD). Respect `prefers-reduced-motion` (static).
@@ -688,7 +688,7 @@ Every chip has a dot AND text.
 Centred card on `--surface-2` background. Top: business name and "Invoice INV-0007". Large amount due,
 status chip, due date. Items table (stacked on mobile), subtotal, tax, total. Blue pill **Pay now**
 (disabled with explanation if paid or void), secondary **Download PDF**. A paid invoice shows a green
-"Paid on {date}" banner and hides the Pay button. Footer: "Invoice created with APP_NAME".
+"Paid on {date}" banner and hides the Pay button. Footer: "Invoice created with Goom Invoice".
 
 ---
 
@@ -729,12 +729,13 @@ Hardest problems (use these in proposals, only once they are true):
 
 ## 15. Assumptions to verify
 
-- [x] Chapa endpoint names, request fields, webhook headers, event names, payer-email requirement — **RESOLVED** (verified 2026-10-25).
-      `email` is required. Endpoint and field details are in §9 Chapa notes. Hardcoding field names is forbidden.
+- [ ] Chapa endpoint names, request fields, webhook headers, event names, payer-email requirement.
+      Web-search notes are in §9 (unverified). **Must be confirmed against the pages the owner pastes before Prompt 9 is run.** Hardcoding field names is forbidden until confirmed.
 - [ ] How Chapa test mode behaves for a free sandbox account created from Ethiopia (verify in dashboard after first deploy).
-- [x] Ethiopic font in PDFs — **RESOLVED**: Embed **Noto Sans Ethiopic** in the backend bundle (Prompt 10).
-      Verify the font licence (SIL Open Font Licence 1.1 — confirm before embedding). ~500 KB added to the Render deploy.
-      Latin characters render correctly with Noto Sans Ethiopic. Without it, Amharic names appear as □ in PDFs.
-- [x] Contrast of white on `--blue-600` — **RESOLVED**: 3.76:1, fails WCAG AA. Button fills use `--blue-700` (#1A5FE0, 4.67:1).
+- [x] Ethiopic font in PDFs — **RESOLVED**: Use a Latin font (Noto Sans or Inter) as the default PDF font.
+      Embed **Noto Sans Ethiopic** as a fallback for text runs that contain Ethiopic characters (detect per-string).
+      Confirm the licence by reading the font's own `LICENSE` file before embedding (expected: SIL OFL 1.1).
+      Add a test that renders `"Abebe Bikila አበበ ቢቂላ"` and asserts the PDF starts with `%PDF`.
+- [x] Contrast of white on `--blue-600` — **RESOLVED**: approx 4.4:1 (below 4.5:1 WCAG AA threshold). Button fills use `--blue-700` (#1A5FE0, approx 5.6:1). Verify both with a contrast checker before shipping.
 - [ ] Neon free-tier limits for connections and storage.
 - [ ] Stripe: not available for Ethiopian accounts. A Stripe provider is a possible future adapter if an account becomes available.

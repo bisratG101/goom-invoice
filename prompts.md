@@ -59,7 +59,8 @@ Set up the project skeleton exactly as in design.md section 5.
 Backend: Node + Express + TypeScript (strict), Zod-validated environment (config/env.ts) that refuses to boot if
 variables are missing or malformed, a standard error envelope, a JSON body size limit, helmet, CORS from CORS_ORIGIN,
 malformed JSON returns 400 INVALID_JSON, GET /health (also checks the database when DATABASE_URL is set),
-Vitest + Supertest with tests for /health, the error envelope, and bad JSON. Scripts: dev, build, start, test, typecheck.
+GET /config (public, no auth, returns { demoMode: boolean } derived from the DEMO_MODE env var — no other secrets),
+Vitest + Supertest with tests for /health, /config, the error envelope, and bad JSON. Scripts: dev, build, start, test, typecheck.
 Frontend: Vite + React 19 + TypeScript + Tailwind v4 + React Router + TanStack Query, with only a placeholder home page
 and a page that calls the API /health and shows the result. Add the font setup from design.md 12.3 and tokens.css from 12.2.
 In tokens.css, after the `:root` block, add a Tailwind v4 `@theme` block that maps every CSS custom property to a Tailwind
@@ -180,7 +181,7 @@ Implement design.md section 9 up to, but NOT including, Chapa:
   PAYMENT_PROVIDERS; payer email sourced from client record or request body; amount and currency always
   from the invoice on the server; returns { checkoutUrl } and, in DEMO_MODE, also { demoCheckoutUrl }).
   Rate-limit all three.
-- POST /auth/demo (DEMO_MODE=true only, rate-limited 5/15 min per IP): returns a 1-hour JWT for the demo
+- POST /auth/demo (DEMO_MODE=true only, ~20 req/15 min per IP, returns 404 when DEMO_MODE=false): returns a 1-hour JWT for the demo
   account. Used by the /demo frontend route.
 - The webhook handler implementing the 10-step algorithm in design.md section 9 EXACTLY, mounted with express.raw BEFORE express.json,
   provider-agnostic, using the provider interface.
@@ -188,6 +189,10 @@ Tests: bad signature (401, no database writes); valid success marks the payment 
 wrong amount does not mark paid (outcome mismatch); unknown reference; success for an already-paid invoice is flagged and does not create a
 second succeeded payment; success for a void invoice is flagged; drafts are never visible publicly; the sanitised payload contains no internal ids,
 no client email or phone.
+Payer email privacy tests (use log capture — intercept the logger and assert the captured output):
+- payerEmail is never written to any log line during the pay flow.
+- The payments table has no payer_email column; confirm via the schema test that inserting one is a database error.
+- GET /public/invoices/:token and GET /public/invoices/:token/status never return a field containing the payer email.
 ```
 Done when: you can create an invoice, send it, pay it with the simulator through curl, and see it become paid.
 
@@ -223,9 +228,11 @@ Done when: fixture tests pass. Real end-to-end testing with Chapa happens after 
 Implement: (1) GET /invoices/:id/pdf and GET /public/invoices/:token/pdf using pdfkit (no headless browser): business name, invoice number,
 dates, client name, items table, subtotal, tax, total, status, notes. Long descriptions wrap; multiple pages if needed.
 Set Content-Type and a safe filename.
-**Ethiopic font:** embed Noto Sans Ethiopic as the default PDF font (see design.md §15). First verify its licence is SIL Open Font
-Licence 1.1 and note it in a comment. Register the font with pdfkit's `registerFont` and use it as the default so Amharic names
-render correctly. Latin characters are also covered by Noto Sans Ethiopic.
+**PDF fonts:** use a Latin font (Noto Sans or Inter) as the default. Embed **Noto Sans Ethiopic** as a secondary font
+for text runs that contain Ethiopic Unicode characters (detect per-string before rendering). Before embedding, read the
+font's own `LICENSE` file and confirm it is SIL OFL 1.1; note the confirmation in a code comment.
+Add a test that renders a PDF for an invoice whose client name is `"Abebe Bikila አበበ ቢቂላ"` and asserts: (a) the response
+is `application/pdf`, (b) the body starts with `%PDF`.
 (2) Dashboard endpoints from design.md section 7 and 8: summary, revenue (months param, default 6), activity.
 All figures are per currency (never summed across currencies), computed in SQL, in the business timezone.
 Tests: PDF responds with application/pdf and starts with %PDF; owner PDF is tenant-isolated; public PDF only for sent/paid/void;
@@ -305,7 +312,8 @@ Done when: you can create, send, copy the link, and void invoices from the UI.
 
 ```
 Build /i/:token (design.md 12.12), /i/:token/return (polls status every 2 seconds for up to 30 seconds with an aria-live message; never marks anything paid itself),
-/pay/simulated/:txRef (demo only, clearly labelled DEMO, "Pay (demo)" and "Cancel"), and /demo (calls POST /auth/demo, stores JWT, navigates to /app; hidden in non-demo environments).
+/pay/simulated/:txRef (demo only, clearly labelled DEMO, "Pay (demo)" and "Cancel"), and /demo (calls POST /auth/demo, stores JWT, navigates to /app;
+only rendered when GET /api/v1/config returns { demoMode: true }).
 **Payer email modal on /i/:token:** when the Pay button is clicked and the active provider is Chapa, and the invoice client has no stored email,
 show a small modal collecting payerEmail (required, email format), payerFirstName (optional), payerLastName (optional). These are posted to the pay
 endpoint and never stored client-side beyond the request.
@@ -325,7 +333,7 @@ Done when: in a private browser window you can open a link, pay with the simulat
 Build the landing page at / following design.md 12.6 exactly: sticky nav, dark hero with the headline and sub-text provided, floating UI cards (invoice card,
 "Payment received" notification, two-currency balance card) with gentle ambient motion that stops under prefers-reduced-motion, the 6-card bento features grid,
 How it works (3 steps), the "Under the hood" strip with the GitHub link placeholder, and the footer with the "portfolio project, test mode" note.
-**"View live demo" CTA:** links to `/demo`. If the environment variable `VITE_DEMO_MODE` is `"false"` or absent, hide the button entirely (not disabled, not greyed — absent).
+**"View live demo" CTA:** links to `/demo`. The frontend calls `GET /api/v1/config` on load; if `demoMode` is false, hide the button entirely (not disabled, not greyed — absent).
 Use only original copy and mini-visuals built with CSS/SVG; no stock photos, no brand logos, no testimonials, no invented numbers.
 Lazy-load below-the-fold sections. Add title, description, canonical, Open Graph, Twitter tags, a 1200x630 OG image, and a favicon.
 Target Lighthouse mobile: Performance 90+, Accessibility 95+, Best Practices 100, SEO 100. Report the actual Lighthouse numbers.
