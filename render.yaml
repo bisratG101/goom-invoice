@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: goom-invoice-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm run start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 1h
+      - key: CORS_ORIGIN
+        sync: false
+      - key: APP_BASE_URL
+        sync: false
+      - key: API_BASE_URL
+        sync: false
+      - key: PAYMENT_PROVIDERS
+        value: chapa,simulated
+      - key: CHAPA_SECRET_KEY
+        sync: false
+      - key: CHAPA_WEBHOOK_SECRET
+        sync: false
+      - key: DEMO_MODE
+        value: "true"
+      - key: SIMULATED_WEBHOOK_SECRET
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
