@@ -58,11 +58,30 @@ export async function runMigrations(options?: {
   });
 
   const client = await pool.connect();
+  let lockAcquired = false;
 
   try {
-    // 1. Acquire advisory lock (session-level lock on this client)
+    // 1. Acquire advisory lock with bounded retry (max 5 seconds)
     log('Acquiring migration advisory lock...');
-    await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_ADVISORY_LOCK_ID]);
+    const lockDeadline = Date.now() + 5000;
+    while (!lockAcquired && Date.now() < lockDeadline) {
+      const lockRes = await client.query<{ pg_try_advisory_lock: boolean }>(
+        'SELECT pg_try_advisory_lock($1)',
+        [MIGRATION_ADVISORY_LOCK_ID]
+      );
+      if (lockRes.rows[0]?.pg_try_advisory_lock) {
+        lockAcquired = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+
+    if (!lockAcquired) {
+      throw new Error(
+        `Failed to acquire migration advisory lock within 5000ms. ` +
+          `Another migration or active database session may be holding lock ${MIGRATION_ADVISORY_LOCK_ID}.`
+      );
+    }
     log('Advisory lock acquired.');
 
     // 2. Ensure schema_migrations table exists
@@ -133,11 +152,13 @@ export async function runMigrations(options?: {
     return { applied, alreadyApplied };
   } finally {
     // 6. Release advisory lock and database connection safely
-    try {
-      await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_ADVISORY_LOCK_ID]);
-      log('Advisory lock released.');
-    } catch (unlockErr) {
-      console.error('[migrate] Failed to release advisory lock:', unlockErr);
+    if (lockAcquired) {
+      try {
+        await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_ADVISORY_LOCK_ID]);
+        log('Advisory lock released.');
+      } catch (unlockErr) {
+        console.error('[migrate] Failed to release advisory lock:', unlockErr);
+      }
     }
     client.release();
     await pool.end();

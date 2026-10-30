@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import { runMigrations, getDatabaseSslConfig } from './migrate';
+import { resetRateLimits } from '../middleware/rateLimit';
 
 /**
  * Validates that a database URL is strictly safe for testing and is NOT targeting production.
@@ -23,23 +24,7 @@ export function assertSafeTestDatabase(url: string | undefined): string {
     );
   }
 
-  // Safeguard 2: Never allow matching DATABASE_URL unless DATABASE_URL explicitly indicates test
-  const prodUrl = process.env.DATABASE_URL;
-  if (prodUrl && trimmed === prodUrl.trim()) {
-    const isExplicitTestName =
-      trimmed.includes('_test') ||
-      trimmed.includes('-test') ||
-      trimmed.includes('/test') ||
-      trimmed.includes('test_branch');
-    if (!isExplicitTestName) {
-      throw new Error(
-        'FATAL SAFETY CHECK: TEST_DATABASE_URL matches DATABASE_URL and does not contain a "test" identifier. ' +
-          'Refusing to run tests against primary or production database.'
-      );
-    }
-  }
-
-  // Safeguard 3: Check for keywords indicating production in host or dbname
+  // Safeguard 2: Keyword check for keywords indicating production in URL
   const lower = trimmed.toLowerCase();
   if (
     lower.includes('prod') ||
@@ -53,12 +38,150 @@ export function assertSafeTestDatabase(url: string | undefined): string {
     );
   }
 
+  // Parse URL to inspect host and pathname
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch (err: any) {
+    throw new Error(`TEST DATABASE ERROR: Invalid database URL format: ${err.message}`);
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  const isNeon = hostname.endsWith('.neon.tech') || hostname.includes('neon.tech');
+  const isLocal =
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname.endsWith('.local');
+
+  // Safeguard 3: For Neon connections, enforce strict host pinning, timeline ID requirement, and primary separation
+  if (isNeon) {
+    // 3a. Require EXPECTED_TEST_DB_HOST
+    const expectedHost = process.env.EXPECTED_TEST_DB_HOST?.trim().toLowerCase();
+    if (!expectedHost) {
+      throw new Error(
+        'FATAL SAFETY CHECK: EXPECTED_TEST_DB_HOST environment variable is required for Neon test databases. ' +
+          'Refusing to run tests against an unpinned Neon host.'
+      );
+    }
+
+    // 3b. Require exact hostname matching
+    if (hostname !== expectedHost) {
+      throw new Error(
+        `FATAL SAFETY CHECK: TEST_DATABASE_URL hostname "${hostname}" does not match EXPECTED_TEST_DB_HOST "${expectedHost}". ` +
+          'Refusing to connect without exact host confirmation.'
+      );
+    }
+
+    // 3c. Require EXPECTED_TEST_NEON_TIMELINE_ID configuration
+    const expectedTimelineId = process.env.EXPECTED_TEST_NEON_TIMELINE_ID?.trim();
+    if (!expectedTimelineId) {
+      throw new Error(
+        'FATAL SAFETY CHECK: EXPECTED_TEST_NEON_TIMELINE_ID environment variable is required for Neon test databases. ' +
+          'Provide the 32-character hexadecimal timeline ID for the test branch.'
+      );
+    }
+
+    // 3d. Reject matching PRIMARY_DATABASE_URL if configured
+    if (process.env.PRIMARY_DATABASE_URL && process.env.PRIMARY_DATABASE_URL.trim() !== '') {
+      let primaryHostname: string | null = null;
+      try {
+        primaryHostname = new URL(process.env.PRIMARY_DATABASE_URL.trim()).hostname.toLowerCase();
+      } catch {
+        // Ignore invalid PRIMARY_DATABASE_URL parsing format
+      }
+      if (primaryHostname && hostname === primaryHostname) {
+        throw new Error(
+          `FATAL SAFETY CHECK: TEST_DATABASE_URL hostname "${hostname}" matches PRIMARY_DATABASE_URL hostname. ` +
+            'Refusing to run tests against primary or production database.'
+        );
+      }
+    }
+  } else if (isLocal) {
+    // Safeguard 4: Local development path
+    // If DATABASE_URL matches TEST_DATABASE_URL on localhost, verify local database is explicitly named test
+    const prodUrl = process.env.DATABASE_URL;
+    if (prodUrl && trimmed === prodUrl.trim()) {
+      const isExplicitTestName =
+        trimmed.includes('_test') ||
+        trimmed.includes('-test') ||
+        trimmed.includes('/test') ||
+        trimmed.includes('test_branch');
+      if (!isExplicitTestName) {
+        throw new Error(
+          'FATAL SAFETY CHECK: TEST_DATABASE_URL matches DATABASE_URL and does not contain a "test" identifier. ' +
+            'Refusing to run tests against primary or production database.'
+        );
+      }
+    }
+  } else {
+    // Safeguard 5: Other remote non-Neon databases
+    const prodUrl = process.env.DATABASE_URL;
+    if (prodUrl && trimmed === prodUrl.trim()) {
+      const isExplicitTestName =
+        trimmed.includes('_test') ||
+        trimmed.includes('-test') ||
+        trimmed.includes('/test') ||
+        trimmed.includes('test_branch');
+      if (!isExplicitTestName) {
+        throw new Error(
+          'FATAL SAFETY CHECK: TEST_DATABASE_URL matches DATABASE_URL and does not contain a "test" identifier. ' +
+            'Refusing to run tests against primary or production database.'
+        );
+      }
+    }
+  }
+
   return trimmed;
+}
+
+/**
+ * Actively verifies the database identity against the database server before any destructive operation.
+ * For Neon connections, verifies that the server-reported neon.timeline_id exactly matches EXPECTED_TEST_NEON_TIMELINE_ID.
+ * Missing, empty, unavailable, or mismatched identity will throw an error and abort.
+ */
+export async function verifyDatabaseIdentity(
+  client: { query: (sql: string, params?: any[]) => Promise<any> },
+  url: string
+): Promise<void> {
+  const parsed = new URL(url);
+  const hostname = parsed.hostname.toLowerCase();
+  const isNeon = hostname.endsWith('.neon.tech') || hostname.includes('neon.tech');
+
+  if (isNeon) {
+    const expectedTimelineId = process.env.EXPECTED_TEST_NEON_TIMELINE_ID?.trim();
+    if (!expectedTimelineId) {
+      throw new Error(
+        'FATAL SAFETY CHECK: EXPECTED_TEST_NEON_TIMELINE_ID is required for Neon identity verification.'
+      );
+    }
+
+    const res = await client.query(
+      "SELECT current_setting('neon.timeline_id', true) AS timeline_id"
+    );
+    const actualTimelineId = res.rows[0]?.timeline_id?.trim();
+
+    if (!actualTimelineId) {
+      throw new Error(
+        'FATAL SAFETY CHECK: Server did not return a valid "neon.timeline_id" setting. ' +
+          'Database identity could not be verified on Neon connection. Aborting before destructive operation.'
+      );
+    }
+
+    if (actualTimelineId !== expectedTimelineId) {
+      throw new Error(
+        `FATAL SAFETY CHECK: Database timeline ID mismatch. ` +
+          `Server returned "${actualTimelineId}", expected "${expectedTimelineId}". ` +
+          'Aborting before any destructive operation.'
+      );
+    }
+  }
 }
 
 export interface TestDbHelper {
   pool: Pool;
   resetSchema: () => Promise<void>;
+  cleanTables: () => Promise<void>;
   close: () => Promise<void>;
 }
 
@@ -77,12 +200,13 @@ export function createTestDbHelper(testUrl?: string): TestDbHelper {
   return {
     pool,
     async resetSchema() {
-      // Re-verify before wiping
       assertSafeTestDatabase(verifiedUrl);
 
       const client = await pool.connect();
       try {
-        // Drop all tables in public schema cleanly and recreate it
+        // Verify identity immediately before DROP SCHEMA
+        await verifyDatabaseIdentity(client, verifiedUrl);
+
         await client.query('DROP SCHEMA public CASCADE');
         await client.query('CREATE SCHEMA public');
         await client.query('GRANT ALL ON SCHEMA public TO public');
@@ -90,11 +214,27 @@ export function createTestDbHelper(testUrl?: string): TestDbHelper {
         client.release();
       }
 
-      // Reapply migrations cleanly
       await runMigrations({
         connectionString: verifiedUrl,
         logger: () => {}, // quiet during automated test resets
       });
+      resetRateLimits();
+    },
+    async cleanTables() {
+      assertSafeTestDatabase(verifiedUrl);
+
+      const client = await pool.connect();
+      try {
+        // Verify identity immediately before TRUNCATE
+        await verifyDatabaseIdentity(client, verifiedUrl);
+
+        await client.query(
+          'TRUNCATE TABLE users, businesses, clients, invoice_counters, invoices, invoice_items, payments, payment_events RESTART IDENTITY CASCADE'
+        );
+      } finally {
+        client.release();
+      }
+      resetRateLimits();
     },
     async close() {
       await pool.end();

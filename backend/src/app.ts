@@ -7,6 +7,7 @@ import { checkDbHealth } from './db/pool';
 import { authRouter } from './modules/auth/auth.routes';
 import { businessRouter } from './modules/business/business.routes';
 import { clientsRouter } from './modules/clients/clients.routes';
+import { invoicesRouter } from './modules/invoices/invoices.routes';
 
 export function createApp() {
   const app = express();
@@ -56,10 +57,11 @@ export function createApp() {
   app.get('/api/v1/health', healthHandler);
   app.get('/api/v1/config', configHandler);
 
-  // Auth, Business, and Clients routers under /api/v1
+  // Auth, Business, Clients, and Invoices routers under /api/v1
   app.use('/api/v1/auth', authRouter);
   app.use('/api/v1/business', businessRouter);
   app.use('/api/v1/clients', clientsRouter);
+  app.use('/api/v1/invoices', invoicesRouter);
 
   // Centralized error handler
   app.use(errorHandler);

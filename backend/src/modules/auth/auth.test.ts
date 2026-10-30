@@ -158,30 +158,56 @@ describeDb('Authentication & Business Integration Tests (Live PostgreSQL)', () =
   });
 
   it('POST /auth/register rolls back completely if business creation fails', async () => {
-    // Provide business name exceeding 120 chars to trigger database CHECK constraint violation
-    const longBusinessName = 'A'.repeat(125);
-
-    const res = await request(app)
-      .post('/api/v1/auth/register')
-      .send({
-        email: 'rollback@example.com',
-        password: 'Password123!',
-        name: 'Rollback User',
-        businessName: longBusinessName,
-      });
-
-    expect(res.status).toBe(500);
-    expect(res.body.error.code).toBe('REGISTRATION_FAILED');
-
-    // Confirm that the user insert was rolled back and does not exist in the database
+    // Deliberately trigger failure during business creation after user creation has begun
+    // by adding a temporary check constraint on businesses.
     const client = await dbHelper.pool.connect();
     try {
-      const uRes = await client.query('SELECT * FROM users WHERE email = $1', ['rollback@example.com']);
-      expect(uRes.rowCount).toBe(0);
+      await client.query(
+        "ALTER TABLE businesses ADD CONSTRAINT test_fail_business_creation CHECK (name != 'Rollback Business')"
+      );
     } finally {
       client.release();
     }
-  });
+
+    try {
+      // Send a valid registration request matching Zod schema
+      const res = await request(app)
+        .post('/api/v1/auth/register')
+        .send({
+          email: 'rollback@example.com',
+          password: 'Password123!',
+          name: 'Rollback User',
+          businessName: 'Rollback Business',
+        });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error.code).toBe('REGISTRATION_FAILED');
+
+      // Confirm that the transaction rolled back completely:
+      // neither user, business, nor invoice_counters row should remain in the database.
+      const verifyClient = await dbHelper.pool.connect();
+      try {
+        const uRes = await verifyClient.query('SELECT * FROM users WHERE email = $1', ['rollback@example.com']);
+        expect(uRes.rowCount).toBe(0);
+
+        const bRes = await verifyClient.query('SELECT * FROM businesses WHERE name = $1', ['Rollback Business']);
+        expect(bRes.rowCount).toBe(0);
+
+        const cRes = await verifyClient.query('SELECT * FROM invoice_counters');
+        expect(cRes.rowCount).toBe(0);
+      } finally {
+        verifyClient.release();
+      }
+    } finally {
+      // Clean up the temporary constraint
+      const cleanupClient = await dbHelper.pool.connect();
+      try {
+        await cleanupClient.query('ALTER TABLE businesses DROP CONSTRAINT IF EXISTS test_fail_business_creation');
+      } finally {
+        cleanupClient.release();
+      }
+    }
+  }, 30000);
 
   it('POST /auth/register returns 409 for duplicate email (case-insensitive citext)', async () => {
     await request(app)

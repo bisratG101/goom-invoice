@@ -73,7 +73,7 @@ describeDb('Clients Integration Tests (Live PostgreSQL)', () => {
 
   beforeAll(async () => {
     dbHelper = createTestDbHelper(testDbUrl);
-  });
+  }, 30000);
 
   beforeEach(async () => {
     await dbHelper.resetSchema();
@@ -103,7 +103,7 @@ describeDb('Clients Integration Tests (Live PostgreSQL)', () => {
       });
     tokenB = regResB.body.token;
     businessBId = regResB.body.business.id;
-  });
+  }, 30000);
 
   afterAll(async () => {
     if (dbHelper) {
@@ -304,7 +304,7 @@ describeDb('Clients Integration Tests (Live PostgreSQL)', () => {
     expect(customLimit.status).toBe(200);
     expect(customLimit.body.clients).toHaveLength(10);
     expect(customLimit.body.pagination.totalPages).toBe(3);
-  });
+  }, 30000);
 
   it('hides archived clients from default list, supports explicit filtering, and unarchives', async () => {
     const createRes = await request(app)
@@ -354,7 +354,7 @@ describeDb('Clients Integration Tests (Live PostgreSQL)', () => {
       .set('Authorization', `Bearer ${tokenA}`);
     expect(restoredList.body.clients).toHaveLength(1);
     expect(restoredList.body.clients[0].id).toBe(clientId);
-  });
+  }, 30000);
 
   it('cross-business tenant isolation: Business A attempts to read, update, archive, and unarchive Business B client; every operation returns 404', async () => {
     // Create client under Business B

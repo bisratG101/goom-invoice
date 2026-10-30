@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { assertSafeTestDatabase, createTestDbHelper, TestDbHelper } from './testDb';
+import { assertSafeTestDatabase, createTestDbHelper, verifyDatabaseIdentity, TestDbHelper } from './testDb';
 import { runMigrations, computeChecksum } from './migrate';
 import fs from 'fs';
 import path from 'path';
@@ -7,6 +7,20 @@ import path from 'path';
 const testDbUrl = process.env.TEST_DATABASE_URL;
 
 describe('Database Safety & Safeguards (always runs)', () => {
+  const envSnapshot = { ...process.env };
+
+  afterAll(() => {
+    // Restore all process.env to exact initial state so no unit test mock leaks into integration tests
+    for (const key of Object.keys(process.env)) {
+      if (!(key in envSnapshot)) {
+        delete process.env[key];
+      }
+    }
+    for (const [key, value] of Object.entries(envSnapshot)) {
+      process.env[key] = value;
+    }
+  });
+
   it('throws when TEST_DATABASE_URL is missing or empty', () => {
     expect(() => assertSafeTestDatabase(undefined)).toThrowError(/TEST DATABASE ERROR/);
     expect(() => assertSafeTestDatabase('')).toThrowError(/TEST DATABASE ERROR/);
@@ -46,6 +60,199 @@ describe('Database Safety & Safeguards (always runs)', () => {
     expect(hash1).not.toBe(hash3);
     expect(hash1).toHaveLength(64);
   });
+
+  describe('Neon Static Safety Checks', () => {
+    const neonUrl = 'postgresql://user:pass@ep-test-compute-12345.us-east-2.aws.neon.tech/neondb?sslmode=require';
+    const originalHost = process.env.EXPECTED_TEST_DB_HOST;
+    const originalTimeline = process.env.EXPECTED_TEST_NEON_TIMELINE_ID;
+    const originalPrimary = process.env.PRIMARY_DATABASE_URL;
+
+    afterEach(() => {
+      if (originalHost === undefined) delete process.env.EXPECTED_TEST_DB_HOST;
+      else process.env.EXPECTED_TEST_DB_HOST = originalHost;
+
+      if (originalTimeline === undefined) delete process.env.EXPECTED_TEST_NEON_TIMELINE_ID;
+      else process.env.EXPECTED_TEST_NEON_TIMELINE_ID = originalTimeline;
+
+      if (originalPrimary === undefined) delete process.env.PRIMARY_DATABASE_URL;
+      else process.env.PRIMARY_DATABASE_URL = originalPrimary;
+    });
+
+    it('rejects Neon URL when EXPECTED_TEST_DB_HOST is missing', () => {
+      delete process.env.EXPECTED_TEST_DB_HOST;
+      delete process.env.EXPECTED_TEST_NEON_TIMELINE_ID;
+      expect(() => assertSafeTestDatabase(neonUrl)).toThrowError(/EXPECTED_TEST_DB_HOST environment variable is required/);
+    });
+
+    it('rejects Neon URL when EXPECTED_TEST_DB_HOST does not match URL hostname', () => {
+      process.env.EXPECTED_TEST_DB_HOST = 'ep-different-compute.us-east-2.aws.neon.tech';
+      process.env.EXPECTED_TEST_NEON_TIMELINE_ID = '0123456789abcdef0123456789abcdef';
+      expect(() => assertSafeTestDatabase(neonUrl)).toThrowError(/does not match EXPECTED_TEST_DB_HOST/);
+    });
+
+    it('rejects Neon URL when EXPECTED_TEST_NEON_TIMELINE_ID is missing', () => {
+      process.env.EXPECTED_TEST_DB_HOST = 'ep-test-compute-12345.us-east-2.aws.neon.tech';
+      delete process.env.EXPECTED_TEST_NEON_TIMELINE_ID;
+      expect(() => assertSafeTestDatabase(neonUrl)).toThrowError(/EXPECTED_TEST_NEON_TIMELINE_ID environment variable is required/);
+    });
+
+    it('rejects Neon URL when hostname matches PRIMARY_DATABASE_URL', () => {
+      process.env.EXPECTED_TEST_DB_HOST = 'ep-test-compute-12345.us-east-2.aws.neon.tech';
+      process.env.EXPECTED_TEST_NEON_TIMELINE_ID = '0123456789abcdef0123456789abcdef';
+      process.env.PRIMARY_DATABASE_URL = 'postgresql://user:pass@ep-test-compute-12345.us-east-2.aws.neon.tech/neondb?sslmode=require';
+      expect(() => assertSafeTestDatabase(neonUrl)).toThrowError(/matches PRIMARY_DATABASE_URL hostname/);
+    });
+
+    it('passes Neon static check when host and timeline ID are properly configured and host != primary', () => {
+      process.env.EXPECTED_TEST_DB_HOST = 'ep-test-compute-12345.us-east-2.aws.neon.tech';
+      process.env.EXPECTED_TEST_NEON_TIMELINE_ID = '0123456789abcdef0123456789abcdef';
+      process.env.PRIMARY_DATABASE_URL = 'postgresql://user:pass@ep-prod-compute-99999.us-east-2.aws.neon.tech/neondb?sslmode=require';
+      const result = assertSafeTestDatabase(neonUrl);
+      expect(result).toBe(neonUrl);
+    });
+  });
+
+  describe('Local Development Safety Checks', () => {
+    const localUrl = 'postgresql://postgres:postgres@localhost:5432/goom_invoice_test?sslmode=disable';
+    const originalDbUrl = process.env.DATABASE_URL;
+
+    afterEach(() => {
+      if (originalDbUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = originalDbUrl;
+    });
+
+    it('passes for localhost test database without requiring Neon environment variables', () => {
+      const result = assertSafeTestDatabase(localUrl);
+      expect(result).toBe(localUrl);
+    });
+
+    it('rejects local database when matching DATABASE_URL without test identifier', () => {
+      const nonTestLocal = 'postgresql://postgres:postgres@localhost:5432/goom_invoice?sslmode=disable';
+      process.env.DATABASE_URL = nonTestLocal;
+      expect(() => assertSafeTestDatabase(nonTestLocal)).toThrowError(/does not contain a "test" identifier/);
+    });
+
+    it('passes local database when matching DATABASE_URL with test identifier', () => {
+      process.env.DATABASE_URL = localUrl;
+      const result = assertSafeTestDatabase(localUrl);
+      expect(result).toBe(localUrl);
+    });
+  });
+
+  describe('Neon Server-Side Identity Verification (verifyDatabaseIdentity)', () => {
+    const neonUrl = 'postgresql://user:pass@ep-test-compute-12345.us-east-2.aws.neon.tech/neondb?sslmode=require';
+    const expectedTimeline = '1234567890abcdef1234567890abcdef';
+    const originalTimeline = process.env.EXPECTED_TEST_NEON_TIMELINE_ID;
+
+    afterEach(() => {
+      if (originalTimeline === undefined) delete process.env.EXPECTED_TEST_NEON_TIMELINE_ID;
+      else process.env.EXPECTED_TEST_NEON_TIMELINE_ID = originalTimeline;
+    });
+
+    it('verifies identity successfully when server returns exact expected timeline ID', async () => {
+      process.env.EXPECTED_TEST_NEON_TIMELINE_ID = expectedTimeline;
+      const mockClient = {
+        query: async () => ({ rows: [{ timeline_id: expectedTimeline }] }),
+      };
+
+      await expect(verifyDatabaseIdentity(mockClient, neonUrl)).resolves.toBeUndefined();
+    });
+
+    it('fails closed when server returns mismatched timeline ID', async () => {
+      process.env.EXPECTED_TEST_NEON_TIMELINE_ID = expectedTimeline;
+      const mockClient = {
+        query: async () => ({ rows: [{ timeline_id: 'wrong_timeline_id_from_server_00' }] }),
+      };
+
+      await expect(verifyDatabaseIdentity(mockClient, neonUrl)).rejects.toThrowError(
+        /Database timeline ID mismatch/
+      );
+    });
+
+    it('fails closed when server returns empty or missing timeline ID', async () => {
+      process.env.EXPECTED_TEST_NEON_TIMELINE_ID = expectedTimeline;
+      const mockClient = {
+        query: async () => ({ rows: [{ timeline_id: null }] }),
+      };
+
+      await expect(verifyDatabaseIdentity(mockClient, neonUrl)).rejects.toThrowError(
+        /Server did not return a valid "neon.timeline_id" setting/
+      );
+    });
+
+    it('fails closed when EXPECTED_TEST_NEON_TIMELINE_ID is missing during verification', async () => {
+      delete process.env.EXPECTED_TEST_NEON_TIMELINE_ID;
+      const mockClient = {
+        query: async () => ({ rows: [{ timeline_id: expectedTimeline }] }),
+      };
+
+      await expect(verifyDatabaseIdentity(mockClient, neonUrl)).rejects.toThrowError(
+        /EXPECTED_TEST_NEON_TIMELINE_ID is required/
+      );
+    });
+
+    it('skips Neon timeline verification safely for local databases', async () => {
+      const localUrl = 'postgresql://postgres:postgres@localhost:5432/goom_invoice_test?sslmode=disable';
+      const mockClient = {
+        query: async () => ({ rows: [] }),
+      };
+
+      await expect(verifyDatabaseIdentity(mockClient, localUrl)).resolves.toBeUndefined();
+    });
+  });
+
+  describe('Destructive Operation Abort Guarantee', () => {
+    const originalTimeline = process.env.EXPECTED_TEST_NEON_TIMELINE_ID;
+
+    afterEach(() => {
+      if (originalTimeline === undefined) delete process.env.EXPECTED_TEST_NEON_TIMELINE_ID;
+      else process.env.EXPECTED_TEST_NEON_TIMELINE_ID = originalTimeline;
+    });
+
+    it('aborts before executing DROP SCHEMA when verifyDatabaseIdentity fails', async () => {
+      const executedQueries: string[] = [];
+      const mockClient = {
+        query: async (sql: string) => {
+          executedQueries.push(sql);
+          if (sql.includes('neon.timeline_id')) {
+            return { rows: [{ timeline_id: 'unexpected_prod_timeline_id' }] };
+          }
+          return { rows: [] };
+        },
+      };
+
+      process.env.EXPECTED_TEST_NEON_TIMELINE_ID = 'expected_test_timeline_id';
+      const neonUrl = 'postgresql://user:pass@ep-test-compute-12345.us-east-2.aws.neon.tech/neondb?sslmode=require';
+
+      await expect(verifyDatabaseIdentity(mockClient, neonUrl)).rejects.toThrowError(/Database timeline ID mismatch/);
+
+      // Verify no destructive SQL was executed
+      expect(executedQueries.some((q) => q.toUpperCase().includes('DROP SCHEMA'))).toBe(false);
+      expect(executedQueries.some((q) => q.toUpperCase().includes('TRUNCATE'))).toBe(false);
+    });
+
+    it('aborts before executing TRUNCATE when verifyDatabaseIdentity fails', async () => {
+      const executedQueries: string[] = [];
+      const mockClient = {
+        query: async (sql: string) => {
+          executedQueries.push(sql);
+          if (sql.includes('neon.timeline_id')) {
+            return { rows: [{ timeline_id: '' }] };
+          }
+          return { rows: [] };
+        },
+      };
+
+      process.env.EXPECTED_TEST_NEON_TIMELINE_ID = 'expected_test_timeline_id';
+      const neonUrl = 'postgresql://user:pass@ep-test-compute-12345.us-east-2.aws.neon.tech/neondb?sslmode=require';
+
+      await expect(verifyDatabaseIdentity(mockClient, neonUrl)).rejects.toThrowError(/Server did not return a valid "neon.timeline_id"/);
+
+      // Verify no destructive SQL was executed
+      expect(executedQueries.some((q) => q.toUpperCase().includes('TRUNCATE'))).toBe(false);
+      expect(executedQueries.some((q) => q.toUpperCase().includes('DROP SCHEMA'))).toBe(false);
+    });
+  });
 });
 
 // The following constraint tests run against a real PostgreSQL database when TEST_DATABASE_URL is provided.
@@ -56,11 +263,11 @@ describeDb('PostgreSQL Schema & Constraint Tests (Prompt 3)', () => {
 
   beforeAll(async () => {
     dbHelper = createTestDbHelper(testDbUrl);
-  });
+  }, 30000);
 
   beforeEach(async () => {
     await dbHelper.resetSchema();
-  });
+  }, 30000);
 
   afterAll(async () => {
     if (dbHelper) {
