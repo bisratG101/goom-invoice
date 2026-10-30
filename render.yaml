@@ -2,6 +2,7 @@ services:
   - type: web
     name: goom-invoice-api
     runtime: node
+    plan: free
     rootDir: backend
     buildCommand: npm install --include=dev && npm run build
     startCommand: npm run start
