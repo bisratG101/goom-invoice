@@ -6,6 +6,7 @@ import { errorHandler } from './middleware/errorHandler';
 import { checkDbHealth } from './db/pool';
 import { authRouter } from './modules/auth/auth.routes';
 import { businessRouter } from './modules/business/business.routes';
+import { clientsRouter } from './modules/clients/clients.routes';
 
 export function createApp() {
   const app = express();
@@ -55,9 +56,10 @@ export function createApp() {
   app.get('/api/v1/health', healthHandler);
   app.get('/api/v1/config', configHandler);
 
-  // Auth and Business routers under /api/v1
+  // Auth, Business, and Clients routers under /api/v1
   app.use('/api/v1/auth', authRouter);
   app.use('/api/v1/business', businessRouter);
+  app.use('/api/v1/clients', clientsRouter);
 
   // Centralized error handler
   app.use(errorHandler);
