@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import { env } from '../config/env';
+import { getDatabaseSslConfig } from './migrate';
 
 let pool: Pool | null = null;
 
@@ -10,7 +11,7 @@ export function getDbPool(): Pool | null {
   if (!pool) {
     pool = new Pool({
       connectionString: env.DATABASE_URL,
-      ssl: env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+      ssl: getDatabaseSslConfig(env.DATABASE_URL),
     });
   }
   return pool;

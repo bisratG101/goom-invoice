@@ -4,6 +4,8 @@ import cors from 'cors';
 import { env } from './config/env';
 import { errorHandler } from './middleware/errorHandler';
 import { checkDbHealth } from './db/pool';
+import { authRouter } from './modules/auth/auth.routes';
+import { businessRouter } from './modules/business/business.routes';
 
 export function createApp() {
   const app = express();
@@ -52,6 +54,10 @@ export function createApp() {
 
   app.get('/api/v1/health', healthHandler);
   app.get('/api/v1/config', configHandler);
+
+  // Auth and Business routers under /api/v1
+  app.use('/api/v1/auth', authRouter);
+  app.use('/api/v1/business', businessRouter);
 
   // Centralized error handler
   app.use(errorHandler);
