@@ -8,6 +8,7 @@ import { authRouter } from './modules/auth/auth.routes';
 import { businessRouter } from './modules/business/business.routes';
 import { clientsRouter } from './modules/clients/clients.routes';
 import { invoicesRouter } from './modules/invoices/invoices.routes';
+import { webhookHandler, publicInvoicesRouter, demoRouter } from './modules/payments/public.routes';
 
 export function createApp() {
   const app = express();
@@ -21,6 +22,13 @@ export function createApp() {
       origin: env.CORS_ORIGIN,
       credentials: true,
     })
+  );
+
+  // Raw body parser for webhooks (must be BEFORE express.json())
+  app.post(
+    ['/webhooks/:provider', '/api/v1/webhooks/:provider'],
+    express.raw({ type: 'application/json', limit: '100kb' }),
+    webhookHandler
   );
 
   // Body parser with 100kb limit
@@ -57,11 +65,21 @@ export function createApp() {
   app.get('/api/v1/health', healthHandler);
   app.get('/api/v1/config', configHandler);
 
-  // Auth, Business, Clients, and Invoices routers under /api/v1
+  // Auth, Business, Clients, and Invoices routers
+  app.use('/auth', authRouter);
   app.use('/api/v1/auth', authRouter);
+  app.use('/business', businessRouter);
   app.use('/api/v1/business', businessRouter);
+  app.use('/clients', clientsRouter);
   app.use('/api/v1/clients', clientsRouter);
+  app.use('/invoices', invoicesRouter);
   app.use('/api/v1/invoices', invoicesRouter);
+
+  // Public invoice endpoints and Demo endpoints
+  app.use('/public/invoices', publicInvoicesRouter);
+  app.use('/api/v1/public/invoices', publicInvoicesRouter);
+  app.use('/demo', demoRouter);
+  app.use('/api/v1/demo', demoRouter);
 
   // Centralized error handler
   app.use(errorHandler);

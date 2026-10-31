@@ -134,14 +134,22 @@ export function formatInvoiceItem(item: any) {
   };
 }
 
+export function formatInvoiceDisplayNumber(
+  prefix: string | null | undefined,
+  number: number | null | undefined
+): string | null {
+  if (!number) return null;
+  const p = prefix || 'INV';
+  return `${p}-${String(number).padStart(4, '0')}`;
+}
+
 export function formatInvoice(
   row: any,
   items: any[] = [],
   business?: { invoice_prefix?: string; timezone?: string },
   payments: any[] = []
 ) {
-  const prefix = business?.invoice_prefix || 'INV';
-  const displayNumber = row.number ? `${prefix}-${String(row.number).padStart(4, '0')}` : null;
+  const displayNumber = formatInvoiceDisplayNumber(business?.invoice_prefix, row.number);
   const timezone = business?.timezone || 'Africa/Addis_Ababa';
   const isOverdue = isInvoiceOverdue(row.status, row.due_date, timezone);
 

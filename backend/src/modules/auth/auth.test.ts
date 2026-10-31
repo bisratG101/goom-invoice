@@ -3,6 +3,7 @@ import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import { app } from '../../app';
 import { env } from '../../config/env';
+import { closeDbPool } from '../../db/pool';
 import { createTestDbHelper, TestDbHelper } from '../../db/testDb';
 import { signUserToken } from '../../utils/jwt';
 
@@ -91,21 +92,24 @@ describe('Authentication & Business Unit/Mock Tests (always runs)', () => {
   });
 });
 
-describeDb('Authentication & Business Integration Tests (Live PostgreSQL)', () => {
+describeDb('Authentication & Business Integration Tests (Live PostgreSQL)', { timeout: 30000 }, () => {
   let dbHelper: TestDbHelper;
 
   beforeAll(async () => {
     dbHelper = createTestDbHelper(testDbUrl);
-  });
+    await closeDbPool();
+    await dbHelper.resetSchema();
+  }, 30000);
 
   beforeEach(async () => {
-    await dbHelper.resetSchema();
+    await dbHelper.cleanTables();
   });
 
   afterAll(async () => {
     if (dbHelper) {
       await dbHelper.close();
     }
+    await closeDbPool();
   });
 
   it('POST /auth/register creates user, business, and invoice_counters in one transaction', async () => {
@@ -155,7 +159,7 @@ describeDb('Authentication & Business Integration Tests (Live PostgreSQL)', () =
     } finally {
       client.release();
     }
-  });
+  }, 30000);
 
   it('POST /auth/register rolls back completely if business creation fails', async () => {
     // Deliberately trigger failure during business creation after user creation has begun

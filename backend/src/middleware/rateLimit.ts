@@ -79,6 +79,22 @@ export const authRateLimiter = createRateLimiter({
   message: 'Too many authentication attempts, please try again later.',
 });
 
+// 60 requests per minute per IP for public invoice viewing
+export const publicRateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: 'Too many public requests, please try again later.',
+});
+
+// 20 requests per 15 minutes per IP for payment initiation
+export const payRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: 'Too many payment attempts, please try again later.',
+});
+
 export function resetRateLimits(): void {
   authRateLimiter.reset();
+  publicRateLimiter.reset();
+  payRateLimiter.reset();
 }

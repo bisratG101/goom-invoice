@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import { env } from '../../config/env';
 import { getDbPool } from '../../db/pool';
 import { signUserToken } from '../../utils/jwt';
 import { authRateLimiter } from '../../middleware/rateLimit';
@@ -265,4 +266,113 @@ authRouter.get('/me', requireAuth, requireOwner, (req: Request, res: Response) =
       timezone: business.timezone,
     },
   });
+});
+
+/**
+ * POST /api/v1/auth/demo
+ * Available only when DEMO_MODE=true (returns 404 when DEMO_MODE=false).
+ * Rate-limited (~20 req/15 min per IP).
+ * Returns a 1-hour JWT for the demo account. No request body required.
+ */
+authRouter.post('/demo', authRateLimiter, async (_req: Request, res: Response) => {
+  if (!env.DEMO_MODE) {
+    res.status(404).json({
+      error: {
+        code: 'NOT_FOUND',
+        message: 'Demo mode is disabled',
+      },
+    });
+    return;
+  }
+
+  const pool = getDbPool();
+  if (!pool) {
+    res.status(500).json({
+      error: {
+        code: 'DATABASE_ERROR',
+        message: 'Database connection unavailable',
+      },
+    });
+    return;
+  }
+
+  const demoEmail = 'demo@goominvoice.com';
+
+  try {
+    // Check if demo user already exists
+    let userRes = await pool.query<{ id: string; email: string; name: string }>(
+      'SELECT id, email, name FROM users WHERE email = $1',
+      [demoEmail]
+    );
+
+    if (userRes.rowCount === 0) {
+      // Create demo user + business in one transaction
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const hash = await bcrypt.hash('DemoPassword123!', 10);
+        const newUser = await client.query<{ id: string; email: string; name: string }>(
+          'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name',
+          [demoEmail, hash, 'Demo Owner']
+        );
+        const newBiz = await client.query<{ id: string }>(
+          `INSERT INTO businesses (owner_id, name, default_currency, invoice_prefix, timezone)
+           VALUES ($1, 'Demo Logistics', 'ETB', 'INV', 'Africa/Addis_Ababa')
+           RETURNING id`,
+          [newUser.rows[0].id]
+        );
+        await client.query(
+          'INSERT INTO invoice_counters (business_id, last_number) VALUES ($1, 0) ON CONFLICT DO NOTHING',
+          [newBiz.rows[0].id]
+        );
+        await client.query('COMMIT');
+        userRes = newUser;
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+    }
+
+    const demoUser = userRes.rows[0];
+
+    const bizRes = await pool.query<{
+      id: string;
+      name: string;
+      default_currency: string;
+      invoice_prefix: string;
+      timezone: string;
+    }>('SELECT id, name, default_currency, invoice_prefix, timezone FROM businesses WHERE owner_id = $1', [
+      demoUser.id,
+    ]);
+
+    const business = bizRes.rows[0];
+    const token = signUserToken({ userId: demoUser.id, email: demoUser.email });
+
+    res.status(200).json({
+      token,
+      user: {
+        id: demoUser.id,
+        email: demoUser.email,
+        name: demoUser.name,
+      },
+      business: business
+        ? {
+            id: business.id,
+            name: business.name,
+            defaultCurrency: business.default_currency,
+            invoicePrefix: business.invoice_prefix,
+            timezone: business.timezone,
+          }
+        : null,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: {
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to authenticate demo account',
+      },
+    });
+  }
 });
