@@ -1,12 +1,14 @@
 import { env } from '../../config/env';
 import { PaymentProvider } from './provider.interface';
 import { simulatedProvider } from './simulated.provider';
+import { chapaProvider } from './chapa';
 
 export class ProviderRegistry {
   private providers = new Map<string, PaymentProvider>();
 
   constructor() {
-    // Register built-in simulated provider
+    // Register built-in providers
+    this.register(chapaProvider);
     this.register(simulatedProvider);
   }
 
