@@ -13,6 +13,7 @@ import {
   parseDecimalToMinor,
 } from '../../utils/money';
 import { getTodayInTimezone, isInvoiceOverdue } from '../../utils/timezone';
+import { generateInvoicePdf, PdfInvoiceData } from './pdf.service';
 
 export const invoicesRouter = Router();
 
@@ -1074,5 +1075,124 @@ invoicesRouter.post('/:id/void', requireAuth, requireOwner, async (req: Request,
     });
   } finally {
     client.release();
+  }
+});
+
+/**
+ * GET /api/v1/invoices/:id/pdf
+ * Generates and downloads the invoice PDF for the authenticated business owner.
+ */
+invoicesRouter.get('/:id/pdf', requireAuth, requireOwner, async (req: Request, res: Response) => {
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  if (!id || !isValidUuid(id)) {
+    res.status(404).json({
+      error: { code: 'INVOICE_NOT_FOUND', message: 'Invoice not found' },
+    });
+    return;
+  }
+
+  const business = req.business!;
+  const pool = getDbPool();
+  if (!pool) {
+    res.status(500).json({
+      error: { code: 'DATABASE_ERROR', message: 'Database connection unavailable' },
+    });
+    return;
+  }
+
+  try {
+    const invoiceRes = await pool.query<{
+      id: string;
+      number: number | null;
+      currency: 'ETB' | 'USD';
+      status: 'draft' | 'sent' | 'paid' | 'void';
+      issue_date: Date | string;
+      due_date: Date | string;
+      tax_rate_bps: number;
+      subtotal_minor: string;
+      tax_minor: string;
+      total_minor: string;
+      notes: string | null;
+      client_name: string;
+    }>(
+      `SELECT i.id, i.number, i.currency, i.status, i.issue_date, i.due_date,
+              i.tax_rate_bps, i.subtotal_minor, i.tax_minor, i.total_minor, i.notes,
+              c.name AS client_name
+       FROM invoices i
+       JOIN clients c ON c.id = i.client_id
+       WHERE i.id = $1 AND i.business_id = $2`,
+      [id, business.id]
+    );
+
+    if (invoiceRes.rowCount === 0) {
+      res.status(404).json({
+        error: { code: 'INVOICE_NOT_FOUND', message: 'Invoice not found' },
+      });
+      return;
+    }
+
+    const row = invoiceRes.rows[0];
+
+    const itemsRes = await pool.query<{
+      position: number;
+      description: string;
+      quantity_milli: number;
+      unit_price_minor: string;
+      line_total_minor: string;
+    }>(
+      `SELECT position, description, quantity_milli, unit_price_minor, line_total_minor
+       FROM invoice_items
+       WHERE invoice_id = $1
+       ORDER BY position ASC`,
+      [row.id]
+    );
+
+    const issueDateStr =
+      row.issue_date instanceof Date
+        ? row.issue_date.toISOString().slice(0, 10)
+        : String(row.issue_date).slice(0, 10);
+    const dueDateStr =
+      row.due_date instanceof Date
+        ? row.due_date.toISOString().slice(0, 10)
+        : String(row.due_date).slice(0, 10);
+
+    const displayNumber = formatInvoiceDisplayNumber(business.invoice_prefix, row.number);
+
+    const pdfData: PdfInvoiceData = {
+      businessName: business.name,
+      invoicePrefix: business.invoice_prefix,
+      number: row.number,
+      displayNumber: displayNumber || undefined,
+      status: row.status,
+      issueDate: issueDateStr,
+      dueDate: dueDateStr,
+      currency: row.currency,
+      clientName: row.client_name,
+      items: itemsRes.rows.map((item) => ({
+        position: item.position,
+        description: item.description,
+        quantityMilli: item.quantity_milli,
+        unitPriceMinor: Number(item.unit_price_minor),
+        lineTotalMinor: Number(item.line_total_minor),
+      })),
+      subtotalMinor: Number(row.subtotal_minor),
+      taxMinor: Number(row.tax_minor),
+      totalMinor: Number(row.total_minor),
+      taxRateBps: row.tax_rate_bps,
+      notes: row.notes,
+    };
+
+    const pdfBuffer = await generateInvoicePdf(pdfData);
+
+    const filename = displayNumber ? `invoice-${displayNumber}.pdf` : `invoice-${row.id}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.status(200).send(pdfBuffer);
+  } catch (err: any) {
+    res.status(500).json({
+      error: { code: 'INTERNAL_SERVER_ERROR', message: 'Failed to generate invoice PDF' },
+    });
   }
 });

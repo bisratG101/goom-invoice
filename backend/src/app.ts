@@ -8,6 +8,7 @@ import { authRouter } from './modules/auth/auth.routes';
 import { businessRouter } from './modules/business/business.routes';
 import { clientsRouter } from './modules/clients/clients.routes';
 import { invoicesRouter } from './modules/invoices/invoices.routes';
+import { dashboardRouter } from './modules/dashboard/dashboard.routes';
 import { webhookHandler, publicInvoicesRouter, demoRouter } from './modules/payments/public.routes';
 
 export function createApp() {
@@ -74,6 +75,8 @@ export function createApp() {
   app.use('/api/v1/clients', clientsRouter);
   app.use('/invoices', invoicesRouter);
   app.use('/api/v1/invoices', invoicesRouter);
+  app.use('/dashboard', dashboardRouter);
+  app.use('/api/v1/dashboard', dashboardRouter);
 
   // Public invoice endpoints and Demo endpoints
   app.use('/public/invoices', publicInvoicesRouter);

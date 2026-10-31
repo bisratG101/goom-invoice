@@ -8,6 +8,7 @@ import { publicRateLimiter, payRateLimiter } from '../../middleware/rateLimit';
 import { paymentRegistry } from './registry';
 import { logger } from '../../utils/logger';
 import { formatInvoiceDisplayNumber } from '../invoices/invoices.routes';
+import { generateInvoicePdf, PdfInvoiceData } from '../invoices/pdf.service';
 import { simulatedProvider } from './simulated.provider';
 import { processWebhook } from './webhook.service';
 
@@ -230,6 +231,132 @@ publicInvoicesRouter.get('/:token/status', publicRateLimiter, async (req: Reques
     logger.error('Failed to poll invoice status', { error: err.message });
     res.status(500).json({
       error: { code: 'INTERNAL_SERVER_ERROR', message: 'Failed to poll invoice status' },
+    });
+  }
+});
+
+/**
+ * GET /public/invoices/:token/pdf
+ * Public invoice PDF download.
+ * Drafts are NEVER publicly visible (returns 404).
+ * Accessible only for sent, paid, and void invoices.
+ * NEVER exposes internal IDs, client email/phone, or private owner info.
+ */
+publicInvoicesRouter.get('/:token/pdf', publicRateLimiter, async (req: Request, res: Response) => {
+  const token = req.params.token;
+  if (!token || typeof token !== 'string') {
+    res.status(404).json({
+      error: { code: 'INVOICE_NOT_FOUND', message: 'Invoice not found' },
+    });
+    return;
+  }
+
+  const pool = getDbPool();
+  if (!pool) {
+    res.status(500).json({
+      error: { code: 'DATABASE_ERROR', message: 'Database connection unavailable' },
+    });
+    return;
+  }
+
+  try {
+    const invoiceRes = await pool.query<{
+      id: string;
+      number: number | null;
+      invoice_prefix: string;
+      business_name: string;
+      client_name: string;
+      currency: 'ETB' | 'USD';
+      status: 'draft' | 'sent' | 'paid' | 'void';
+      issue_date: Date | string;
+      due_date: Date | string;
+      tax_rate_bps: number;
+      subtotal_minor: string;
+      tax_minor: string;
+      total_minor: string;
+      notes: string | null;
+    }>(
+      `SELECT i.id, i.number, i.currency, i.status, i.issue_date, i.due_date,
+              i.tax_rate_bps, i.subtotal_minor, i.tax_minor, i.total_minor, i.notes,
+              b.invoice_prefix, b.name AS business_name, c.name AS client_name
+       FROM invoices i
+       JOIN businesses b ON b.id = i.business_id
+       JOIN clients c ON c.id = i.client_id
+       WHERE i.public_token = $1`,
+      [token]
+    );
+
+    if (invoiceRes.rowCount === 0) {
+      res.status(404).json({
+        error: { code: 'INVOICE_NOT_FOUND', message: 'Invoice not found' },
+      });
+      return;
+    }
+
+    const row = invoiceRes.rows[0];
+
+    // Draft invoices are never publicly accessible
+    if (row.status === 'draft') {
+      res.status(404).json({
+        error: { code: 'INVOICE_NOT_FOUND', message: 'Invoice not found' },
+      });
+      return;
+    }
+
+    const itemsRes = await pool.query<{
+      position: number;
+      description: string;
+      quantity_milli: number;
+      unit_price_minor: string;
+      line_total_minor: string;
+    }>(
+      `SELECT position, description, quantity_milli, unit_price_minor, line_total_minor
+       FROM invoice_items
+       WHERE invoice_id = $1
+       ORDER BY position ASC`,
+      [row.id]
+    );
+
+    const issueDateStr = formatDateOnly(row.issue_date);
+    const dueDateStr = formatDateOnly(row.due_date);
+    const displayNumber = formatInvoiceDisplayNumber(row.invoice_prefix, row.number);
+
+    const pdfData: PdfInvoiceData = {
+      businessName: row.business_name,
+      invoicePrefix: row.invoice_prefix,
+      number: row.number,
+      displayNumber: displayNumber || undefined,
+      status: row.status,
+      issueDate: issueDateStr,
+      dueDate: dueDateStr,
+      currency: row.currency,
+      clientName: row.client_name,
+      items: itemsRes.rows.map((item) => ({
+        position: item.position,
+        description: item.description,
+        quantityMilli: item.quantity_milli,
+        unitPriceMinor: Number(item.unit_price_minor),
+        lineTotalMinor: Number(item.line_total_minor),
+      })),
+      subtotalMinor: Number(row.subtotal_minor),
+      taxMinor: Number(row.tax_minor),
+      totalMinor: Number(row.total_minor),
+      taxRateBps: row.tax_rate_bps,
+      notes: row.notes,
+    };
+
+    const pdfBuffer = await generateInvoicePdf(pdfData);
+
+    const filename = displayNumber ? `invoice-${displayNumber}.pdf` : `invoice-${row.id}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.status(200).send(pdfBuffer);
+  } catch (err: any) {
+    logger.error('Failed to generate public invoice PDF', { error: err.message });
+    res.status(500).json({
+      error: { code: 'INTERNAL_SERVER_ERROR', message: 'Failed to generate invoice PDF' },
     });
   }
 });
