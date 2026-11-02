@@ -14,6 +14,15 @@ import { webhookHandler, publicInvoicesRouter, demoRouter } from './modules/paym
 export function createApp() {
   const app = express();
 
+  // Reverse proxy trust configuration:
+  // Render deployment topology routes inbound traffic through a single-hop edge proxy.
+  // In production, or when TRUST_PROXY is explicitly configured, trust the verified hop count.
+  const trustProxySetting = env.TRUST_PROXY ?? (env.NODE_ENV === 'production' ? '1' : undefined);
+  if (trustProxySetting !== undefined && trustProxySetting !== '') {
+    const numericHop = Number(trustProxySetting);
+    app.set('trust proxy', isNaN(numericHop) ? trustProxySetting : numericHop);
+  }
+
   // Security headers
   app.use(helmet());
 

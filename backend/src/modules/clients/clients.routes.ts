@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireOwner } from '../../middleware/auth';
 import { getDbPool } from '../../db/pool';
+import { escapeIlikePattern } from '../../utils/sql';
 
 export const clientsRouter = Router();
 
@@ -99,8 +100,9 @@ clientsRouter.get('/', requireAuth, requireOwner, async (req: Request, res: Resp
 
   // Search by name or email
   if (searchTerm && searchTerm.length > 0) {
+    const escapedTerm = escapeIlikePattern(searchTerm);
     conditions.push(`(name ILIKE $${paramIndex} OR (email IS NOT NULL AND email::text ILIKE $${paramIndex}))`);
-    values.push(`%${searchTerm}%`);
+    values.push(`%${escapedTerm}%`);
     paramIndex++;
   }
 

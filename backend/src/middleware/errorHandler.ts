@@ -37,6 +37,22 @@ export function errorHandler(
     return;
   }
 
+  // Catch payload too large errors from express.json() / body-parser
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    (('status' in err && (err as { status: unknown }).status === 413) ||
+      ('type' in err && (err as { type: unknown }).type === 'entity.too.large'))
+  ) {
+    res.status(413).json({
+      error: {
+        code: 'PAYLOAD_TOO_LARGE',
+        message: 'Request payload exceeds 100kb limit',
+      },
+    });
+    return;
+  }
+
   // Handle application specific errors
   if (err instanceof AppError) {
     res.status(err.statusCode).json({

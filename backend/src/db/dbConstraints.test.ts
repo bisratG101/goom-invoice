@@ -137,6 +137,33 @@ describe('Database Safety & Safeguards (always runs)', () => {
       const result = assertSafeTestDatabase(localUrl);
       expect(result).toBe(localUrl);
     });
+
+    it('strictly rejects development databases (e.g. goom_dev, dev, development, staging)', () => {
+      const devLocal = 'postgresql://postgres:postgres@localhost:5434/goom_dev';
+      expect(() => assertSafeTestDatabase(devLocal)).toThrowError(/targets a development, staging, or demo database/);
+
+      const devNamed = 'postgresql://postgres:postgres@localhost:5434/development_db';
+      expect(() => assertSafeTestDatabase(devNamed)).toThrowError(/targets a development, staging, or demo database/);
+
+      const stagingDb = 'postgresql://postgres:postgres@localhost:5434/goom_staging';
+      expect(() => assertSafeTestDatabase(stagingDb)).toThrowError(/targets a development, staging, or demo database/);
+    });
+
+    it('strictly rejects any local database missing an explicit "test" identifier', () => {
+      const bareLocal = 'postgresql://postgres:postgres@localhost:5434/goom_invoice';
+      expect(() => assertSafeTestDatabase(bareLocal)).toThrowError(/does not contain a "test" identifier/);
+    });
+
+    it('server-side verifyDatabaseIdentity aborts if current_database() reports a development database', async () => {
+      const mockClient = {
+        query: vi.fn().mockResolvedValue({
+          rows: [{ current_db: 'goom_dev' }],
+        }),
+      };
+      await expect(
+        verifyDatabaseIdentity(mockClient, 'postgresql://postgres:postgres@localhost:5434/goom_test')
+      ).rejects.toThrowError(/is not an authorized test database/);
+    });
   });
 
   describe('Neon Server-Side Identity Verification (verifyDatabaseIdentity)', () => {

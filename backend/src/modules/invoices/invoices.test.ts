@@ -479,6 +479,53 @@ describeDb('Invoices Integration Tests (Live PostgreSQL)', { timeout: 30000 }, (
       .set('Authorization', `Bearer ${tokenA}`);
     expect(searchList.body.invoices).toHaveLength(1);
     expect(searchList.body.invoices[0].notes).toBe('Beta invoice');
+
+    // Literal % and _ escaping in invoice search queries
+    const invPercent = await request(app)
+      .post('/api/v1/invoices')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        clientId: clientAId,
+        notes: 'Invoice with 100% discount special note',
+        items: [{ description: 'Percent Item', quantityMilli: 1000, unitPriceMinor: 1000 }],
+      });
+    expect(invPercent.status).toBe(201);
+
+    const invPlain = await request(app)
+      .post('/api/v1/invoices')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        clientId: clientAId,
+        notes: 'Invoice with 100 plain discount special note',
+        items: [{ description: 'Plain Item', quantityMilli: 1000, unitPriceMinor: 1000 }],
+      });
+    expect(invPlain.status).toBe(201);
+
+    // Search with literal '%' should match only invPercent
+    const searchPercent = await request(app)
+      .get('/api/v1/invoices?search=100%25')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(searchPercent.status).toBe(200);
+    expect(searchPercent.body.invoices).toHaveLength(1);
+    expect(searchPercent.body.invoices[0].notes).toBe('Invoice with 100% discount special note');
+  });
+
+  it('safely handles SQL injection attempts in invoice search queries', async () => {
+    const injectionPayloads = [
+      "' OR '1'='1",
+      "'; DROP TABLE invoices; --",
+      "' UNION SELECT id, number, currency, status FROM invoices --",
+      "1' OR 1=1 --",
+    ];
+
+    for (const payload of injectionPayloads) {
+      const res = await request(app)
+        .get(`/api/v1/invoices?search=${encodeURIComponent(payload)}`)
+        .set('Authorization', `Bearer ${tokenA}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.invoices).toHaveLength(0);
+    }
   });
 
   // Concurrency Test: 10 drafts sent concurrently produces unique consecutive numbers.

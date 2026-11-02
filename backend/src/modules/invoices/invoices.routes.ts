@@ -14,6 +14,7 @@ import {
 } from '../../utils/money';
 import { getTodayInTimezone, isInvoiceOverdue } from '../../utils/timezone';
 import { generateInvoicePdf, PdfInvoiceData } from './pdf.service';
+import { escapeIlikePattern } from '../../utils/sql';
 
 export const invoicesRouter = Router();
 
@@ -449,10 +450,11 @@ invoicesRouter.get('/', requireAuth, requireOwner, async (req: Request, res: Res
 
   // Search by client name, notes, or number
   if (searchTerm && searchTerm.length > 0) {
+    const escapedTerm = escapeIlikePattern(searchTerm);
     conditions.push(
       `(c.name ILIKE $${paramIndex} OR (i.notes IS NOT NULL AND i.notes ILIKE $${paramIndex}) OR (i.number IS NOT NULL AND i.number::text ILIKE $${paramIndex}))`
     );
-    values.push(`%${searchTerm}%`);
+    values.push(`%${escapedTerm}%`);
     paramIndex++;
   }
 

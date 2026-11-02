@@ -90,6 +90,40 @@ describe('Authentication & Business Unit/Mock Tests (always runs)', () => {
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('UNAUTHORIZED');
   });
+
+  it('rejects JWT token signed with "none" algorithm', async () => {
+    const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({ userId: 'some-uuid', email: 'user@test.com' })).toString('base64url');
+    const noneToken = `${header}.${payload}.`;
+
+    const res = await request(app)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${noneToken}`);
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('UNAUTHORIZED');
+  });
+
+  it('rejects JWT token signed with an invalid/foreign secret', async () => {
+    const foreignToken = jwt.sign(
+      { userId: 'some-uuid', email: 'user@test.com' },
+      'wrong_foreign_secret_key_at_least_32_chars_long',
+      { algorithm: 'HS256', expiresIn: '1h' }
+    );
+
+    const res = await request(app)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${foreignToken}`);
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('UNAUTHORIZED');
+  });
+
+  it('rejects arbitrary malformed token strings', async () => {
+    const res = await request(app)
+      .get('/api/v1/auth/me')
+      .set('Authorization', 'Bearer not-a-valid-jwt-token-string');
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('UNAUTHORIZED');
+  });
 });
 
 describeDb('Authentication & Business Integration Tests (Live PostgreSQL)', { timeout: 30000 }, () => {

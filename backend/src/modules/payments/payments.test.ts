@@ -6,6 +6,7 @@ import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
 import { paymentRegistry } from './registry';
 import { simulatedProvider } from './simulated.provider';
+import { processWebhook } from './webhook.service';
 import { closeDbPool, getDbPool } from '../../db/pool';
 import { createTestDbHelper, TestDbHelper } from '../../db/testDb';
 import { resetRateLimits } from '../../middleware/rateLimit';
@@ -81,6 +82,19 @@ describe('Payments Unit & Mocked Tests (Always runs)', () => {
       const payload = Buffer.from(JSON.stringify({ event: 'payment.succeeded', txRef: 'tx_123' }), 'utf8');
       const isValid = simulatedProvider.verifySignature(payload, {});
       expect(isValid).toBe(false);
+    });
+
+    it('rejects invalid signature via processWebhook directly before accessing database', async () => {
+      const payload = Buffer.from(JSON.stringify({ event: 'payment.succeeded', txRef: 'tx_123' }), 'utf8');
+      const result = await processWebhook(
+        simulatedProvider,
+        payload,
+        { 'x-simulated-signature': 'bad_signature_hex' },
+        null as any // Database pool is never accessed if signature check fails
+      );
+
+      expect(result.statusCode).toBe(401);
+      expect(result.body.error.code).toBe('INVALID_SIGNATURE');
     });
   });
 
@@ -175,6 +189,143 @@ describe('Payments Unit & Mocked Tests (Always runs)', () => {
       expect(serialized).not.toContain(sensitiveSecret);
       expect(entry.meta.payerEmail).toBe('[REDACTED]');
       expect(entry.meta.txRef).toBe('tx_safe_ref_999');
+    });
+  });
+
+  describe('Demo Mode Endpoints Gating & Validation (Unit - No DB required)', () => {
+    beforeEach(() => {
+      resetRateLimits();
+    });
+
+    it('returns 404 for POST /auth/demo and /api/v1/auth/demo when DEMO_MODE=false', async () => {
+      (env as any).DEMO_MODE = false;
+
+      const res1 = await request(app).post('/auth/demo');
+      expect(res1.status).toBe(404);
+      expect(res1.body.error.code).toBe('NOT_FOUND');
+
+      const res2 = await request(app).post('/api/v1/auth/demo');
+      expect(res2.status).toBe(404);
+      expect(res2.body.error.code).toBe('NOT_FOUND');
+    });
+
+    it('returns 404 for POST /demo/simulated/:txRef/complete when DEMO_MODE=false', async () => {
+      (env as any).DEMO_MODE = false;
+
+      const res1 = await request(app).post('/demo/simulated/tx_sample/complete');
+      expect(res1.status).toBe(404);
+      expect(res1.body.error.code).toBe('NOT_FOUND');
+
+      const res2 = await request(app).post('/api/v1/demo/simulated/tx_sample/complete');
+      expect(res2.status).toBe(404);
+      expect(res2.body.error.code).toBe('NOT_FOUND');
+    });
+
+    it('returns 404 for POST /webhooks/simulated when DEMO_MODE=false', async () => {
+      (env as any).DEMO_MODE = false;
+
+      const res = await request(app)
+        .post('/webhooks/simulated')
+        .set('Content-Type', 'application/json')
+        .send(JSON.stringify({ event: 'payment.succeeded' }));
+
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe('PROVIDER_NOT_FOUND');
+    });
+
+    it('enforces rate limit on POST /auth/demo (20 requests per 15 min per IP)', async () => {
+      (env as any).DEMO_MODE = false; // Returns 404, but authRateLimiter still counts attempts!
+
+      // Send 20 requests with x-test-rate-limit header
+      for (let i = 0; i < 20; i++) {
+        const res = await request(app)
+          .post('/api/v1/auth/demo')
+          .set('x-test-rate-limit', 'true');
+        expect(res.status).toBe(404);
+      }
+
+      // 21st request must be 429
+      const blockedRes = await request(app)
+        .post('/api/v1/auth/demo')
+        .set('x-test-rate-limit', 'true');
+      expect(blockedRes.status).toBe(429);
+      expect(blockedRes.body.error.code).toBe('RATE_LIMIT_EXCEEDED');
+    });
+
+    it('validates pay request body schema strictly: rejects invalid email format with 422', async () => {
+      const res = await request(app)
+        .post('/public/invoices/tok_dummy/pay')
+        .send({
+          payerEmail: 'not-an-email-address',
+          payerFirstName: 'Test',
+        });
+
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+      expect(res.body.error.details).toHaveProperty('payerEmail');
+    });
+
+    it('enforces rate limit on POST /demo/simulated/:txRef/complete (20 requests per 15 min per IP)', async () => {
+      (env as any).DEMO_MODE = false; // Rate limiter runs before handler checks DEMO_MODE or DB
+
+      for (let i = 0; i < 20; i++) {
+        const res = await request(app)
+          .post('/demo/simulated/tx_test_ratelimit/complete')
+          .set('x-test-rate-limit', 'true');
+        expect(res.status).toBe(404);
+      }
+
+      const blockedRes = await request(app)
+        .post('/demo/simulated/tx_test_ratelimit/complete')
+        .set('x-test-rate-limit', 'true');
+      expect(blockedRes.status).toBe(429);
+      expect(blockedRes.body.error.code).toBe('RATE_LIMIT_EXCEEDED');
+    });
+
+    it('accepts payerFirstName and payerLastName of exactly 100 characters and trims whitespace', async () => {
+      const exact100First = 'A'.repeat(100);
+      const exact100Last = 'B'.repeat(100);
+
+      const res = await request(app)
+        .post('/public/invoices/tok_dummy/pay')
+        .send({
+          payerFirstName: `  ${exact100First}  `,
+          payerLastName: `  ${exact100Last}  `,
+        });
+
+      // Body validation succeeds (not 422 VALIDATION_ERROR); proceeds past Zod validation
+      expect(res.status).not.toBe(422);
+      expect(res.body.error?.code).not.toBe('VALIDATION_ERROR');
+    });
+
+    it('rejects payerFirstName when exceeding 100 characters (101 chars) with 422', async () => {
+      const tooLongFirst = 'A'.repeat(101);
+
+      const res = await request(app)
+        .post('/public/invoices/tok_dummy/pay')
+        .send({
+          payerFirstName: tooLongFirst,
+        });
+
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+      expect(res.body.error.details).toHaveProperty('payerFirstName');
+      expect(res.body.error.details.payerFirstName[0]).toContain('100');
+    });
+
+    it('rejects payerLastName when exceeding 100 characters (101 chars) with 422', async () => {
+      const tooLongLast = 'B'.repeat(101);
+
+      const res = await request(app)
+        .post('/public/invoices/tok_dummy/pay')
+        .send({
+          payerLastName: tooLongLast,
+        });
+
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+      expect(res.body.error.details).toHaveProperty('payerLastName');
+      expect(res.body.error.details.payerLastName[0]).toContain('100');
     });
   });
 });
@@ -669,6 +820,82 @@ describeDb('Payments Integration Tests (Live PostgreSQL)', { timeout: 30000 }, (
       expect(publicViewRes.body.invoice.payments[0].provider).toBe('simulated');
       expect(publicViewRes.body.invoice.payments[0].status).toBe('succeeded');
       expect(publicViewRes.body.invoice.payments[0].amount).toBe(100000);
+
+      // 7. Duplicate completion request: must be idempotent and return 200 with duplicate webhook status
+      const repeatRes = await request(app)
+        .post(`/demo/simulated/${txRef}/complete`)
+        .send();
+      expect(repeatRes.status).toBe(200);
+      expect(repeatRes.body.status).toBe('ok');
+      expect(repeatRes.body.result.status).toBe('duplicate');
+    });
+  });
+
+  describe('Payment Provider Selection and Validation (Live PostgreSQL)', () => {
+    it('returns 422 INVALID_PROVIDER when unknown provider is requested', async () => {
+      const sentInvoice = await createInvoice({ send: true });
+      const res = await request(app)
+        .post(`/public/invoices/${sentInvoice.publicToken}/pay`)
+        .send({ provider: 'unsupported_provider' });
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('INVALID_PROVIDER');
+    });
+
+    it('returns 422 INVOICE_NOT_PAYABLE when trying to pay a paid invoice', async () => {
+      const sentInvoice = await createInvoice({ send: true });
+      const payRes = await request(app)
+        .post(`/public/invoices/${sentInvoice.publicToken}/pay`)
+        .send({ provider: 'simulated' });
+      const txRef = payRes.body.checkoutUrl.replace('/pay/simulated/', '');
+      await request(app).post(`/demo/simulated/${txRef}/complete`).send();
+
+      // Attempt to pay again
+      const payAgainRes = await request(app)
+        .post(`/public/invoices/${sentInvoice.publicToken}/pay`)
+        .send({ provider: 'simulated' });
+      expect(payAgainRes.status).toBe(422);
+      expect(payAgainRes.body.error.code).toBe('INVOICE_NOT_PAYABLE');
+    });
+
+    it('enforces payerEmail for Chapa provider when client has no email', async () => {
+      // Create a client with no email
+      const clientNoEmailRes = await request(app)
+        .post('/api/v1/clients')
+        .set('Authorization', `Bearer ${userToken}`)
+        .send({ name: 'Client Without Email' });
+      const clientNoEmailId = clientNoEmailRes.body.client.id;
+
+      const invRes = await request(app)
+        .post('/api/v1/invoices')
+        .set('Authorization', `Bearer ${userToken}`)
+        .send({
+          clientId: clientNoEmailId,
+          issueDate: '2026-10-30',
+          dueDate: '2026-11-15',
+          currency: 'ETB',
+          items: [{ description: 'Item 1', quantity: 1, unitPriceMinor: 10000 }],
+        });
+      const inv = invRes.body.invoice;
+      const sendRes = await request(app)
+        .post(`/api/v1/invoices/${inv.id}/send`)
+        .set('Authorization', `Bearer ${userToken}`);
+      const token = sendRes.body.invoice.publicToken;
+
+      (env as any).PAYMENT_PROVIDERS = 'chapa,simulated';
+
+      // 1. Missing payerEmail -> 422 PAYER_EMAIL_REQUIRED
+      const payNoEmailRes = await request(app)
+        .post(`/public/invoices/${token}/pay`)
+        .send({ provider: 'chapa' });
+      expect(payNoEmailRes.status).toBe(422);
+      expect(payNoEmailRes.body.error.code).toBe('PAYER_EMAIL_REQUIRED');
+
+      // 2. Empty string payerEmail -> 422 PAYER_EMAIL_REQUIRED
+      const payEmptyEmailRes = await request(app)
+        .post(`/public/invoices/${token}/pay`)
+        .send({ provider: 'chapa', payerEmail: '' });
+      expect(payEmptyEmailRes.status).toBe(422);
+      expect(payEmptyEmailRes.body.error.code).toBe('PAYER_EMAIL_REQUIRED');
     });
   });
 

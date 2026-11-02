@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { z } from 'zod';
-import supertest from 'supertest';
 import { env } from '../../config/env';
 import { getDbPool } from '../../db/pool';
 import { publicRateLimiter, payRateLimiter } from '../../middleware/rateLimit';
@@ -26,10 +25,24 @@ export function formatDateOnly(val: Date | string): string {
 }
 
 const paySchema = z.object({
-  payerEmail: z.string().email('Invalid payer email').optional(),
-  payerFirstName: z.string().optional(),
-  payerLastName: z.string().optional(),
-  provider: z.string().optional(),
+  payerEmail: z
+    .string()
+    .trim()
+    .email('Invalid payer email')
+    .or(z.literal(''))
+    .optional()
+    .transform((val) => (val === '' ? undefined : val)),
+  payerFirstName: z
+    .string()
+    .trim()
+    .max(100, 'First name must be at most 100 characters')
+    .optional(),
+  payerLastName: z
+    .string()
+    .trim()
+    .max(100, 'Last name must be at most 100 characters')
+    .optional(),
+  provider: z.string().trim().optional(),
 });
 
 /**
@@ -574,7 +587,7 @@ publicInvoicesRouter.post('/:token/pay', payRateLimiter, async (req: Request, re
  * The server builds an event, signs it with SIMULATED_WEBHOOK_SECRET,
  * and POSTs it to its own /webhooks/simulated endpoint to trigger the real webhook pipeline.
  */
-demoRouter.post('/simulated/:txRef/complete', async (req: Request, res: Response) => {
+demoRouter.post('/simulated/:txRef/complete', payRateLimiter, async (req: Request, res: Response) => {
   if (!env.DEMO_MODE) {
     res.status(404).json({
       error: { code: 'NOT_FOUND', message: 'Demo mode is not enabled' },
@@ -638,23 +651,24 @@ demoRouter.post('/simulated/:txRef/complete', async (req: Request, res: Response
     };
 
     const rawPayloadString = JSON.stringify(eventPayload);
+    const rawPayloadBuffer = Buffer.from(rawPayloadString, 'utf8');
     const secret = env.SIMULATED_WEBHOOK_SECRET || 'simulated_secret_default_key';
     const signature = crypto
       .createHmac('sha256', secret)
-      .update(Buffer.from(rawPayloadString, 'utf8'))
+      .update(rawPayloadBuffer)
       .digest('hex');
 
-    // POST to own /webhooks/simulated endpoint
-    // Using supertest against req.app dispatches the real HTTP request through Express
-    const webhookRes = await supertest(req.app)
-      .post('/webhooks/simulated')
-      .set('Content-Type', 'application/json')
-      .set('x-simulated-signature', signature)
-      .send(rawPayloadString);
+    // Call the webhook pipeline directly with provider, raw buffer, HMAC signature header, and pool
+    const webhookRes = await processWebhook(
+      simulatedProvider,
+      rawPayloadBuffer,
+      { 'x-simulated-signature': signature },
+      pool
+    );
 
     res.status(200).json({
       status: 'ok',
-      webhookStatus: webhookRes.status,
+      webhookStatus: webhookRes.statusCode,
       result: webhookRes.body,
     });
   } catch (err: any) {

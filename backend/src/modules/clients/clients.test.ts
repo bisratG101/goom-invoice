@@ -267,6 +267,75 @@ describeDb('Clients Integration Tests (Live PostgreSQL)', () => {
     expect(searchByEmail.body.clients).toHaveLength(2);
   });
 
+  it('escapes literal % and _ wildcards in client search queries', async () => {
+    await request(app)
+      .post('/api/v1/clients')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ name: 'Special 100% Promo Client', email: 'promo100@example.com' });
+
+    await request(app)
+      .post('/api/v1/clients')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ name: 'Special 100 Promo Client', email: 'promo100plain@example.com' });
+
+    await request(app)
+      .post('/api/v1/clients')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ name: 'Alpha_Beta Trading', email: 'alpha_beta@example.com' });
+
+    await request(app)
+      .post('/api/v1/clients')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ name: 'Alpha-Beta Trading', email: 'alpha-beta@example.com' });
+
+    // Literal % should match only the client with actual '%' in its name
+    const searchPercent = await request(app)
+      .get('/api/v1/clients?search=100%25')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(searchPercent.status).toBe(200);
+    expect(searchPercent.body.clients).toHaveLength(1);
+    expect(searchPercent.body.clients[0].name).toBe('Special 100% Promo Client');
+
+    // Literal _ should match only the client with actual '_' in its name, not '-'
+    const searchUnderscore = await request(app)
+      .get('/api/v1/clients?search=Alpha_Beta')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(searchUnderscore.status).toBe(200);
+    expect(searchUnderscore.body.clients).toHaveLength(1);
+    expect(searchUnderscore.body.clients[0].name).toBe('Alpha_Beta Trading');
+  });
+
+  it('safely handles SQL injection attempts in search queries without errors or leaks', async () => {
+    await request(app)
+      .post('/api/v1/clients')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ name: 'Legitimate Client Corp', email: 'legit@example.com' });
+
+    const injectionPayloads = [
+      "' OR '1'='1",
+      "'; DROP TABLE clients; --",
+      "' UNION SELECT id, name, NULL, NULL, NULL, NULL, NULL FROM users --",
+      "1' OR 1=1 --",
+      "\\'; DROP TABLE users; --",
+    ];
+
+    for (const payload of injectionPayloads) {
+      const res = await request(app)
+        .get(`/api/v1/clients?search=${encodeURIComponent(payload)}`)
+        .set('Authorization', `Bearer ${tokenA}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.clients).toHaveLength(0);
+    }
+
+    // Verify legitimate client and table remain completely intact
+    const checkRes = await request(app)
+      .get('/api/v1/clients')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(checkRes.status).toBe(200);
+    expect(checkRes.body.clients.length).toBeGreaterThan(0);
+  });
+
   it('paginates client listings with default limit 20 and custom pages', async () => {
     // Insert 25 clients
     for (let i = 1; i <= 25; i++) {

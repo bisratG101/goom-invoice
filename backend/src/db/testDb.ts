@@ -47,12 +47,41 @@ export function assertSafeTestDatabase(url: string | undefined): string {
   }
 
   const hostname = parsed.hostname.toLowerCase();
+  const dbName = parsed.pathname.replace(/^\//, '').toLowerCase();
   const isNeon = hostname.endsWith('.neon.tech') || hostname.includes('neon.tech');
   const isLocal =
     hostname === 'localhost' ||
     hostname === '127.0.0.1' ||
     hostname === '::1' ||
     hostname.endsWith('.local');
+
+  // Safeguard 2b: Explicitly reject development, staging, or demo databases in TEST_DATABASE_URL
+  if (
+    dbName.includes('dev') ||
+    dbName.includes('development') ||
+    dbName.includes('staging') ||
+    dbName.includes('demo')
+  ) {
+    throw new Error(
+      `FATAL SAFETY CHECK: TEST_DATABASE_URL database name "${dbName}" targets a development, staging, or demo database. ` +
+        'Test cleanup and migrations are strictly isolated to dedicated test databases and will never touch development data.'
+    );
+  }
+
+  // Safeguard 2c: For non-Neon databases, require an explicit test identifier in the database name
+  if (!isNeon) {
+    const hasTestIdentifier =
+      dbName.includes('test') ||
+      dbName.includes('_test') ||
+      dbName.includes('-test') ||
+      dbName === 'test';
+    if (!hasTestIdentifier) {
+      throw new Error(
+        `FATAL SAFETY CHECK: TEST_DATABASE_URL database name "${dbName}" does not contain a "test" identifier. ` +
+          'Refusing to run tests against a non-test database.'
+      );
+    }
+  }
 
   // Safeguard 3: For Neon connections, enforce strict host pinning, timeline ID requirement, and primary separation
   if (isNeon) {
@@ -174,6 +203,33 @@ export async function verifyDatabaseIdentity(
           `Server returned "${actualTimelineId}", expected "${expectedTimelineId}". ` +
           'Aborting before any destructive operation.'
       );
+    }
+  }
+
+  // Server-side database identity verification: verify current_database()
+  try {
+    const dbRes = await client.query(
+      'SELECT current_database() AS current_db'
+    );
+    const actualDb = (dbRes?.rows?.[0]?.current_db || '').toLowerCase().trim();
+
+    if (actualDb) {
+      if (
+        actualDb.includes('dev') ||
+        actualDb.includes('prod') ||
+        actualDb.includes('staging') ||
+        actualDb.includes('demo') ||
+        (!isNeon && !actualDb.includes('test'))
+      ) {
+        throw new Error(
+          `FATAL SAFETY CHECK: Connected database "${actualDb}" is not an authorized test database. ` +
+            'Test cleanup and destructive operations aborted.'
+        );
+      }
+    }
+  } catch (err: any) {
+    if (err?.message?.includes('FATAL SAFETY CHECK')) {
+      throw err;
     }
   }
 }

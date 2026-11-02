@@ -21,6 +21,7 @@ export const envSchema = z.object({
     .transform((val) => val === true || val === 'true'),
   SIMULATED_WEBHOOK_SECRET: z.string().optional(),
   LLM_API_KEY: z.string().optional(),
+  TRUST_PROXY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
