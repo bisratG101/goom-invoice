@@ -20,7 +20,7 @@ This guide details the step-by-step instructions to deploy the Goom Invoice walk
 
 1. Log in to [Neon Console](https://console.neon.tech).
 2. Create a new project:
-   - **Name:** `goom-invoice-prod`
+   - **Name:** `goom-invoice-portfolio` (for portfolio demo deployments; must contain `portfolio` or `demo` for demo seed authorization) or `goom-invoice-prod` (for commercial production)
    - **Region:** Select the region closest to your target users or API service (e.g., `eu-central-1` or `us-east-1`).
    - **PostgreSQL Version:** 16 or 17.
 3. Once the database is ready, copy the **Connection string**. It will look like:
@@ -60,6 +60,7 @@ You can deploy using either the Blueprint (`render.yaml`) or a Manual Web Servic
 |---|---|
 | `NODE_ENV` | `production` |
 | `PORT` | `10000` (Render defaults to 10000) |
+| `TRUST_PROXY` | `1` (Verified single reverse-proxy hop on Render) |
 | `DATABASE_URL` | Neon connection string with `?sslmode=require` |
 | `JWT_SECRET` | Generate 32+ random characters (e.g., `openssl rand -hex 24`) |
 | `JWT_EXPIRES_IN` | `1h` |
@@ -121,15 +122,52 @@ Now that both domains exist, link them together to enable CORS and callback gene
 
 ### Step 5: Verification Checklist
 
+#### Part A: Backend API Health Check (Render Service Endpoint)
+Directly verify the deployed backend service on Render before connecting the frontend.
+
+1. **Direct Verification via curl or browser:**
+   ```bash
+   curl -i https://<service-name>.onrender.com/health
+   ```
+   *(Or navigate directly to `https://<service-name>.onrender.com/health` in your browser).*
+
+2. **Expected Responses & Status Codes:**
+   - **Healthy & Database Connected (Target State):**
+     - HTTP Status: `200 OK`
+     - Response Body: `{"status":"ok","database":"connected"}`
+   - **Database Not Configured:**
+     - HTTP Status: `200 OK`
+     - Response Body: `{"status":"ok","database":"not_configured"}`
+     - *Meaning:* Server booted successfully, but `DATABASE_URL` is omitted or empty.
+   - **Database Connection Failure / Migrations Unapplied (Degraded):**
+     - HTTP Status: `503 Service Unavailable`
+     - Response Body: `{"status":"degraded","database":"disconnected","error":"Database connection failed"}`
+     - *Meaning:* `DATABASE_URL` is configured, but the database is unreachable, password is invalid, or SSL failed. Render will mark the deploy unhealthy.
+3. **Cold Start Note:** On Render's free tier, idle instances take 30–50 seconds to spin up on the first request. Wait for the initial response.
+
+#### Part B: Frontend SPA Verification (Vercel Service Endpoint)
+Verify the production React Single Page Application independently on Vercel.
+
 1. Open `https://<project-name>.vercel.app` in your browser.
-2. Confirm the Goom Invoice placeholder page loads cleanly without stylesheet or script errors.
-3. Click **"Check API Health →"** or navigate directly to `https://<project-name>.vercel.app/health`.
-4. Confirm:
-   - The UI shows `API SERVER: OK`.
-   - The UI displays the real response from the Render API (`status: ok`, `database: not_configured` or `connected`).
-   - Browser DevTools &rarr; Network shows a successful cross-origin `200 OK` request to `https://<service-name>.onrender.com/health` (or `/api/v1/health`).
-   - Browser DevTools &rarr; Console shows **zero** CORS errors and zero failed network requests.
-5. Refresh the page while on `/health` &rarr; Confirm it loads without a 404 error (verifying `vercel.json` SPA rewrite).
+2. Confirm the Goom Invoice landing page loads cleanly without stylesheet or script errors.
+3. **Verify SPA Client Routing (Deep Linking):**
+   - Navigate to `/login` or `/demo`.
+   - Refresh the browser while on that sub-path.
+   - Confirm it loads cleanly without a `404 NOT_FOUND` error (verifying `vercel.json` SPA rewrite rules).
+4. **Verify Frontend-to-Backend Cross-Origin API Connectivity:**
+   - Open Browser DevTools &rarr; Console and Network tabs.
+   - Click **"Explore Demo Account"** (or navigate to `/demo`).
+   - Confirm:
+     - The frontend fetches `GET https://<service-name>.onrender.com/api/v1/config` (status 200).
+     - The frontend posts to `POST https://<service-name>.onrender.com/api/v1/auth/demo` (status 200).
+     - Browser transitions smoothly to the owner dashboard `/app`.
+     - Zero CORS policy errors appear in the DevTools console.
+
+#### Part C: Public Payment Flow Verification
+1. From the dashboard, view any sent invoice and click **"Copy public link"**.
+2. Open the link in an incognito window: `https://<project-name>.vercel.app/i/<public-token>`.
+3. Confirm public invoice details render (display number, amounts, items, issue/due dates).
+4. Click **"Pay (demo)"** (or **"Pay now"** with simulated provider) &rarr; complete payment on simulated gateway &rarr; verify automatic return redirect and payment confirmation chip.
 
 ---
 
@@ -169,7 +207,7 @@ Now that both domains exist, link them together to enable CORS and callback gene
 ---
 
 ### Bug 3: SPA 404 on Refresh (Deep Link Routing)
-- **Symptom:** Visiting `https://<project-name>.vercel.app/` works, but refreshing while on `/health` returns a generic 404: `NOT_FOUND`.
+- **Symptom:** Visiting `https://<project-name>.vercel.app/` works, but refreshing while on a client-side route like `/login` or `/demo` returns a generic 404: `NOT_FOUND`.
 - **Cause:** Vercel looks for a static file named `/health.html` on the server instead of delegating routing to the React SPA router (`index.html`).
 - **Fix:**
   - Verify `frontend/vercel.json` is present and committed with the rewrite rule:
