@@ -3,15 +3,17 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { HomePage } from '../features/landing/HomePage';
 
-describe('Frontend Skeleton', () => {
-  it('renders Goom Invoice home page with health link', () => {
+describe('Landing Page', () => {
+  it('renders landing page with headline, nav, and CTAs', () => {
     render(
       <MemoryRouter>
         <HomePage />
       </MemoryRouter>
     );
 
-    expect(screen.getByText('Goom Invoice')).toBeInTheDocument();
-    expect(screen.getByText(/Check API Health/i)).toBeInTheDocument();
+    expect(screen.getByText(/Get paid faster\. Invoice in seconds, collect in ETB or USD\./i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Create free account/i })).toBeInTheDocument();
+    expect(screen.getByText(/Portfolio project\. Payments run in test mode\./i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Features/i })).toBeInTheDocument();
   });
 });

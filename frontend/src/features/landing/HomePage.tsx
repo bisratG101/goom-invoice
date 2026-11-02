@@ -1,32 +1,48 @@
-import { Link } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
+import { LandingNav } from './LandingNav';
+import { LandingHero } from './LandingHero';
+
+const LandingBento = lazy(() =>
+  import('./LandingBento').then((module) => ({ default: module.LandingBento }))
+);
+const LandingHowItWorks = lazy(() =>
+  import('./LandingHowItWorks').then((module) => ({ default: module.LandingHowItWorks }))
+);
+const LandingUnderTheHood = lazy(() =>
+  import('./LandingUnderTheHood').then((module) => ({ default: module.LandingUnderTheHood }))
+);
+const LandingFooter = lazy(() =>
+  import('./LandingFooter').then((module) => ({ default: module.LandingFooter }))
+);
 
 export function HomePage() {
   return (
-    <main className="min-h-screen bg-surface flex flex-col items-center justify-center p-6 text-center">
-      <div className="max-w-md w-full bg-surface-2 border border-line rounded-lg p-8 shadow-card">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-pill bg-blue-50 text-blue-700 text-xs font-medium mb-4">
-          <span className="w-2 h-2 rounded-full bg-blue-700 animate-pulse"></span>
-          Skeleton Walking
-        </div>
-        <h1 className="text-3xl font-heading font-bold text-ink-900 tracking-tight mb-2">
-          Goom Invoice
-        </h1>
-        <p className="text-ink-600 text-sm mb-6 leading-relaxed">
-          Professional invoicing &amp; automated payments. Designed with exact integer arithmetic, tenant isolation, and verified webhooks.
-        </p>
+    <div className="min-h-screen bg-ink-950 text-ink-900 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
+      {/* Sticky Navigation */}
+      <LandingNav />
 
-        <div className="flex flex-col gap-3">
-          <Link
-            to="/health"
-            className="inline-flex items-center justify-center px-4 py-2.5 rounded-pill bg-blue-700 text-white font-medium text-sm hover:opacity-95 transition-opacity"
-          >
-            Check API Health &rarr;
-          </Link>
-        </div>
-      </div>
-      <footer className="mt-8 text-ink-500 text-xs">
-        Portfolio project &bull; Payments run in test mode
-      </footer>
-    </main>
+      {/* Hero section (above the fold) */}
+      <main id="main-content" className="flex-1">
+        <LandingHero />
+
+        {/* Below the fold lazy-loaded sections */}
+        <Suspense
+          fallback={
+            <div className="py-24 bg-surface text-center flex items-center justify-center">
+              <span className="w-8 h-8 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" aria-hidden="true" />
+            </div>
+          }
+        >
+          <LandingBento />
+          <LandingHowItWorks />
+          <LandingUnderTheHood />
+        </Suspense>
+      </main>
+
+      {/* Lazy-loaded Footer */}
+      <Suspense fallback={<footer className="bg-ink-950 h-24" />}>
+        <LandingFooter />
+      </Suspense>
+    </div>
   );
 }

@@ -6,13 +6,53 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Base focus styling per design tokens */
+/* Global focus-visible indicator: 2px offset ring */
 :focus-visible {
   outline: 2px solid var(--blue-600);
   outline-offset: 2px;
 }
 
-/* Reduced motion support */
+/* Ambient floating animations for landing page hero cards (6-8s ease loops) */
+@keyframes ambient-float-1 {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-8px) rotate(0.4deg);
+  }
+}
+
+@keyframes ambient-float-2 {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-12px) rotate(-0.5deg);
+  }
+}
+
+@keyframes ambient-float-3 {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-10px) rotate(0.6deg);
+  }
+}
+
+.animate-float-1 {
+  animation: ambient-float-1 7s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.animate-float-2 {
+  animation: ambient-float-2 6s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.animate-float-3 {
+  animation: ambient-float-3 8s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+/* Respect prefers-reduced-motion across all elements and transitions */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
