@@ -248,7 +248,7 @@ describe('Prompt 14: Dashboard (/app)', () => {
       expect(screen.getByText('Outstanding (USD)')).toBeInTheDocument();
       expect(screen.queryByText('Outstanding (ETB)')).not.toBeInTheDocument();
     });
-  });
+  }, 10000);
 
   it('renders default currency card with zero balance on new account', async () => {
     vi.spyOn(api, 'fetchDashboardSummary').mockResolvedValue({

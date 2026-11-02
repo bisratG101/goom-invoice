@@ -285,7 +285,7 @@ export function createTestDbHelper(testUrl?: string): TestDbHelper {
         await verifyDatabaseIdentity(client, verifiedUrl);
 
         await client.query(
-          'TRUNCATE TABLE users, businesses, clients, invoice_counters, invoices, invoice_items, payments, payment_events RESTART IDENTITY CASCADE'
+          'TRUNCATE TABLE users, businesses, clients, invoice_counters, invoices, invoice_items, payments, payment_events, ai_usage RESTART IDENTITY CASCADE'
         );
       } finally {
         client.release();

@@ -83,6 +83,7 @@ You can test the application immediately using the synthetic demo account (pre-p
 - **Pluggable Payment Engine:** Unified `PaymentProvider` interface supporting both Chapa (Ethiopian digital rails: Telebirr, CBE Birr, cards) and a zero-dependency Simulated provider.
 - **Idempotent Webhook Processing:** Raw-body HMAC-SHA256 signature verification, row-level locking, provider status re-verification, and database idempotency logging via `payment_events` with partial unique index protections on `payments`.
 - **Real-Time Payment Reconciliation:** Public payer return screen polling the API every 2 seconds with exponential backoff and timeout guards.
+- **"Describe it" AI Invoice Drafting:** Natural language invoice drafting powered by Gemini via native fetch. Extracts line items, quantities, prices, currency, due dates, and VAT. Intelligently matches existing clients (case-insensitively) or suggests new clients without destructive auto-creation. Protected by persistent monthly usage tracking in PostgreSQL, per-user rate limiting, strict JSON schema validation, prompt injection sandboxing, and draft-only safety guards.
 - **Accessible UI (WCAG AA Contrast Compliant):** Grey-inspired design system featuring Plus Jakarta Sans and Inter typography, tabular numbers (`tabular-nums`), high-contrast buttons (`#1A5FE0` for >= 5.6:1 contrast ratio, exceeding the 4.5:1 WCAG AA threshold), and keyboard-navigable dialogs.
 
 ---
@@ -152,6 +153,7 @@ All database tables enforce relational integrity using PostgreSQL composite fore
 | `invoice_items` | Invoice line items | `id` (UUID PK), `invoice_id` (UUID REFERENCES invoices(id) ON DELETE CASCADE), `position` (integer >= 1), `description`, `quantity_milli` (integer, 1000 = 1.000), `unit_price_minor` (bigint), `line_total_minor` (bigint). Composite unique constraint `UNIQUE (invoice_id, position)`. |
 | `payments` | Recorded payment attempts | `id` (UUID PK), `business_id` (UUID), `invoice_id` (UUID), `provider` ('chapa'/'simulated'), `tx_ref` (text), `amount_minor` (bigint > 0), `currency` ('ETB'/'USD'), `status` ('pending','succeeded','failed','cancelled'), `failure_reason`, `created_at`, `confirmed_at`. Composite FK `(invoice_id, business_id) REFERENCES invoices(id, business_id)`, `UNIQUE (provider, tx_ref)`, and partial unique index `payments_one_success_per_invoice ON payments (invoice_id) WHERE status = 'succeeded'`. |
 | `payment_events` | Webhook idempotency ledger | `id` (bigserial PK), `provider` (text), `event_key` (text), `event_type` (text), `payload` (jsonb), `outcome` (text: 'processed','duplicate','mismatch', etc.), `received_at`, `processed_at`. Unique constraint `UNIQUE (provider, event_key)`. |
+| `ai_usage` | Persistent monthly AI drafting usage tracking per tenant | `business_id` (UUID REFERENCES businesses(id) ON DELETE CASCADE), `period` (text NOT NULL, e.g. 'YYYY-MM'), `request_count` (integer NOT NULL DEFAULT 0 CHECK (request_count >= 0)), `updated_at` (timestamptz). Composite PK `PRIMARY KEY (business_id, period)`. |
 | `schema_migrations` | Migration tracking ledger | `filename` (text PK), `checksum` (SHA-256 text), `applied_at` (timestamptz). Enforces checksum integrity and idempotent migrations. |
 
 ---
@@ -201,6 +203,7 @@ The webhook ingestion pipeline (`POST /api/v1/webhooks/:provider`) guarantees fa
   - Public invoice token routes: 60 requests per minute per IP.
   - Webhook endpoints: 100 requests per minute per IP.
 - **Multi-Tenant Defense-in-Depth:** Every SQL query explicitly scopes to `business_id`, backed by composite database foreign keys.
+- **AI Drafting Isolation & Injection Sandboxing:** Server-side LLM calls execute strictly via native `fetch` with no client-side API key leakage. User prompt inputs are wrapped in `<user_input>` delimiters with prompt injection counter-instructions. All LLM outputs undergo strict runtime Zod validation before returning, integers are enforced for monetary amounts, and draft requests are rate-limited per user (10 requests / 15 minutes) and capped by persistent monthly quotas in the database (`ai_usage`).
 - **Safe Seeding Safeguards:** `seedDemo.ts` programmatically rejects production environments, verifies `current_database()` matches approved demo patterns, and requires mandatory `ALLOW_PORTFOLIO_DEMO_SEED=true` opt-in.
 
 ### Operational Disclosures & Pending Items

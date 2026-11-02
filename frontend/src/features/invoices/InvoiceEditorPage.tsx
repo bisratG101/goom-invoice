@@ -16,6 +16,9 @@ import {
   CheckCircleIcon,
   FileTextIcon,
   CalculatorIcon,
+  SparklesIcon,
+  Spinner,
+  RotateCcwIcon,
 } from '../../components/ui/icons';
 import {
   fetchInvoice,
@@ -24,6 +27,8 @@ import {
   fetchClients,
   createClient,
   ApiException,
+  draftInvoiceWithAi,
+  AiDraftClientSuggestion,
 } from '../../lib/api';
 import {
   calculateInvoiceTotals,
@@ -70,6 +75,14 @@ export function InvoiceEditorPage() {
   // Validation & Error states
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [apiError, setApiError] = useState<string | null>(null);
+
+  // AI Draft state
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiSuccessMessage, setAiSuccessMessage] = useState<string | null>(null);
+  const [aiSuggestedClients, setAiSuggestedClients] = useState<AiDraftClientSuggestion[]>([]);
+  const [aiSuggestedName, setAiSuggestedName] = useState<string | null>(null);
 
   // Inline Client Modal state
   const [isAddClientOpen, setIsAddClientOpen] = useState(false);
@@ -161,6 +174,75 @@ export function InvoiceEditorPage() {
         delete next[`item-${index}-${field}`];
         return next;
       });
+    }
+  };
+
+  // AI draft generation handler
+  const handleAiDraft = async () => {
+    const trimmed = aiPrompt.trim();
+    if (trimmed.length < 3) {
+      setAiError('Please enter a description with at least 3 characters.');
+      return;
+    }
+    if (trimmed.length > 500) {
+      setAiError('Prompt cannot exceed 500 characters.');
+      return;
+    }
+
+    setIsAiLoading(true);
+    setAiError(null);
+    setAiSuccessMessage(null);
+    setAiSuggestedClients([]);
+    setAiSuggestedName(null);
+
+    try {
+      const response = await draftInvoiceWithAi(trimmed);
+      const draft = response.draft;
+
+      // Prefill invoice details
+      if (draft.clientId) {
+        setClientId(draft.clientId);
+      }
+      if (draft.currency) {
+        setCurrency(draft.currency);
+      }
+      if (draft.issueDate) {
+        setIssueDate(draft.issueDate);
+      }
+      if (draft.dueDate) {
+        setDueDate(draft.dueDate);
+      }
+      if (draft.taxRatePct !== undefined) {
+        setTaxRatePct(String(draft.taxRatePct));
+      }
+      if (draft.notes !== undefined) {
+        setNotes(draft.notes || '');
+      }
+      if (draft.items && draft.items.length > 0) {
+        setItems(
+          draft.items.map((it, idx) => ({
+            id: `ai-item-${Date.now()}-${idx}`,
+            description: it.description,
+            quantity: String(it.quantity),
+            unitPrice: String(it.unitPrice),
+          }))
+        );
+      }
+
+      setAiSuggestedClients(draft.suggestedClients || []);
+      setAiSuggestedName(draft.suggestedClientName || null);
+
+      let msg = 'Draft generated successfully! Review and edit any field below.';
+      if (draft.matchedClient) {
+        msg = `Draft generated with matched client "${draft.matchedClient.name}". Review all details below.`;
+      }
+      setAiSuccessMessage(msg);
+      addToast('success', 'AI Draft Generated', 'Invoice pre-filled from your description.');
+    } catch (err: any) {
+      const message = err.message || 'Failed to generate AI draft.';
+      setAiError(message);
+    } finally {
+      setIsAiLoading(false);
     }
   };
 
@@ -435,6 +517,159 @@ export function InvoiceEditorPage() {
           <AlertCircleIcon size={18} className="text-red-600 shrink-0 mt-0.5" />
           <div className="text-sm font-medium">{apiError}</div>
         </div>
+      )}
+
+      {/* "Describe it" AI Assistant (New Invoice mode only) */}
+      {!isEditMode && (
+        <section
+          aria-label="AI Invoice Drafting"
+          className="p-5 sm:p-6 rounded-xl bg-surface border border-blue-200 dark:border-blue-900/50 shadow-sm space-y-4"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-lg bg-blue-600 text-white shadow-sm">
+                <SparklesIcon size={18} />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-ink-900 flex items-center gap-2">
+                  <span>Describe it</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300">
+                    AI Draft
+                  </span>
+                </h2>
+                <p className="text-xs text-ink-500 mt-0.5">
+                  Type a natural language prompt to generate an editable draft invoice. Never saves or sends automatically.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Textarea
+              id="ai-prompt-input"
+              rows={2}
+              value={aiPrompt}
+              onChange={(e) => {
+                setAiPrompt(e.target.value);
+                if (aiError) setAiError(null);
+              }}
+              placeholder="e.g. Bill Acme Corp 15,000 ETB for website design and 5,000 ETB for SEO, due in 2 weeks with 15% VAT"
+              maxLength={500}
+              className="resize-none"
+              aria-describedby="ai-prompt-help"
+            />
+            <div className="flex items-center justify-between text-xs">
+              <span id="ai-prompt-help" className="text-ink-400">
+                Max 500 characters. Only generates a draft proposal.
+              </span>
+              <span className={`font-mono ${aiPrompt.length > 500 ? 'text-red-600 font-bold' : 'text-ink-500'}`}>
+                {aiPrompt.length} / 500
+              </span>
+            </div>
+          </div>
+
+          {aiError && (
+            <div
+              role="alert"
+              className="p-3 rounded-lg bg-red-50 border border-red-500/20 text-red-800 text-xs flex items-center justify-between gap-2"
+            >
+              <div className="flex items-center gap-2">
+                <AlertCircleIcon size={16} className="text-red-600 shrink-0" />
+                <span>{aiError}</span>
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={handleAiDraft}
+                className="h-7 text-xs px-2 shrink-0"
+              >
+                <RotateCcwIcon size={12} className="mr-1" />
+                Retry
+              </Button>
+            </div>
+          )}
+
+          {aiSuccessMessage && (
+            <div
+              role="status"
+              className="p-3 rounded-lg bg-emerald-50 border border-emerald-500/20 text-emerald-800 text-xs flex items-center gap-2"
+            >
+              <CheckCircleIcon size={16} className="text-emerald-600 shrink-0" />
+              <span>{aiSuccessMessage}</span>
+            </div>
+          )}
+
+          {/* Ambiguous Client Suggestions */}
+          {aiSuggestedClients.length > 0 && (
+            <div className="p-3 rounded-lg bg-amber-50/80 border border-amber-500/20 text-xs space-y-2">
+              <div className="font-semibold text-amber-900 flex items-center gap-1.5">
+                <span>Multiple client matches found for &quot;{aiSuggestedName}&quot;. Select one:</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {aiSuggestedClients.map((client) => (
+                  <button
+                    key={client.id}
+                    type="button"
+                    onClick={() => {
+                      setClientId(client.id);
+                      setAiSuggestedClients([]);
+                      setAiSuggestedName(null);
+                      addToast('info', 'Client Selected', `Selected ${client.name}`);
+                    }}
+                    className="px-2.5 py-1 rounded-md bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 font-medium transition-colors shadow-xs"
+                  >
+                    {client.name} {client.email ? `(${client.email})` : ''}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* New Client Suggestion CTA */}
+          {aiSuggestedName && aiSuggestedClients.length === 0 && !clientId && (
+            <div className="p-3 rounded-lg bg-blue-50/80 border border-blue-200 text-xs flex items-center justify-between gap-2">
+              <span className="text-blue-900">
+                Client <strong>&quot;{aiSuggestedName}&quot;</strong> is not in your contacts yet.
+              </span>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setNewClientName(aiSuggestedName);
+                  setIsAddClientOpen(true);
+                }}
+                className="h-7 text-xs px-2 shrink-0 bg-white"
+              >
+                <PlusIcon size={12} className="mr-1" />
+                Create &quot;{aiSuggestedName}&quot;
+              </Button>
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={handleAiDraft}
+              disabled={isAiLoading || aiPrompt.trim().length < 3 || aiPrompt.length > 500}
+            >
+              {isAiLoading ? (
+                <>
+                  <Spinner size={14} className="mr-2 text-white" />
+                  <span>Drafting invoice...</span>
+                </>
+              ) : (
+                <>
+                  <SparklesIcon size={14} className="mr-1.5" />
+                  <span>Generate Draft</span>
+                </>
+              )}
+            </Button>
+          </div>
+        </section>
       )}
 
       {/* Editor Form */}

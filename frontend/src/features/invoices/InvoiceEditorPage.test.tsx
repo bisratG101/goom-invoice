@@ -409,4 +409,310 @@ describe('Prompt 15: Invoice Editor (/app/invoices/new, /app/invoices/:id/edit)'
       expect(screen.getByDisplayValue('Web development & QA')).toBeInTheDocument();
     });
   });
+
+  describe('Prompt 21: Describe it (AI Invoice Drafting)', () => {
+    it('renders "Describe it" card on New Invoice page with character counter and button', async () => {
+      renderNewInvoice();
+
+      await waitFor(() => {
+        expect(screen.getByText('Describe it')).toBeInTheDocument();
+        expect(screen.getByText('AI Draft')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(/e\.g\. Bill Acme Corp/i)).toBeInTheDocument();
+        expect(screen.getByText('0 / 500')).toBeInTheDocument();
+      });
+
+      const button = screen.getByRole('button', { name: /generate draft/i });
+      expect(button).toBeDisabled();
+
+      // Typing in prompt updates counter and enables button once >= 3 chars
+      const textarea = screen.getByPlaceholderText(/e\.g\. Bill Acme Corp/i);
+      fireEvent.change(textarea, { target: { value: 'Bill Acme Corp for SEO' } });
+
+      expect(screen.getByText('22 / 500')).toBeInTheDocument();
+      expect(button).not.toBeDisabled();
+    });
+
+    it('does NOT render "Describe it" card in edit mode', async () => {
+      vi.spyOn(api, 'fetchInvoice').mockResolvedValue({
+        invoice: {
+          id: 'draft-inv-1',
+          businessId: 'b1',
+          clientId: 'c1',
+          clientName: 'Acme Corporation',
+          clientEmail: 'acme@example.com',
+          number: null,
+          displayNumber: null,
+          issueDate: '2026-03-01',
+          dueDate: '2026-03-15',
+          currency: 'USD',
+          subtotalMinor: 10000,
+          taxRateBps: 0,
+          taxMinor: 0,
+          totalMinor: 10000,
+          status: 'draft',
+          notes: 'Notes',
+          publicToken: '',
+          publicUrl: '',
+          sentAt: null,
+          paidAt: null,
+          voidedAt: null,
+          isOverdue: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          items: [],
+          payments: [],
+        },
+      });
+
+      renderEditInvoice('draft-inv-1');
+
+      await waitFor(() => {
+        expect(screen.getByText(/Edit Draft Invoice/i)).toBeInTheDocument();
+      });
+
+      expect(screen.queryByText('Describe it')).not.toBeInTheDocument();
+    });
+
+    it('pre-fills invoice form on successful AI draft with matched client', async () => {
+      const mockAiDraft = vi.spyOn(api, 'draftInvoiceWithAi').mockResolvedValue({
+        draft: {
+          clientId: 'c1',
+          matchedClient: { id: 'c1', name: 'Acme Corporation', email: 'acme@example.com' },
+          suggestedClients: [],
+          suggestedClientName: null,
+          currency: 'ETB',
+          issueDate: '2026-11-02',
+          dueDate: '2026-11-16',
+          taxRateBps: 1500,
+          taxRatePct: 15,
+          notes: 'Pay within 14 days',
+          items: [
+            {
+              description: 'Custom ERP Development',
+              quantity: 1,
+              quantityMilli: 1000,
+              unitPrice: 50000,
+              unitPriceMinor: 5000000,
+              lineTotalMinor: 5000000,
+            },
+            {
+              description: 'Server Migration & Setup',
+              quantity: 2,
+              quantityMilli: 2000,
+              unitPrice: 10000,
+              unitPriceMinor: 1000000,
+              lineTotalMinor: 2000000,
+            },
+          ],
+          subtotalMinor: 7000000,
+          taxMinor: 1050000,
+          totalMinor: 8050000,
+        },
+      });
+
+      renderNewInvoice();
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(/e\.g\. Bill Acme Corp/i)).toBeInTheDocument();
+      });
+
+      const textarea = screen.getByPlaceholderText(/e\.g\. Bill Acme Corp/i);
+      fireEvent.change(textarea, { target: { value: 'Bill Acme Corp for ERP and setup with 15% VAT' } });
+
+      const generateBtn = screen.getByRole('button', { name: /generate draft/i });
+      fireEvent.click(generateBtn);
+
+      await waitFor(() => {
+        expect(mockAiDraft).toHaveBeenCalledWith('Bill Acme Corp for ERP and setup with 15% VAT');
+        expect(screen.getByText(/Draft generated with matched client "Acme Corporation"/i)).toBeInTheDocument();
+      });
+
+      // Verify form inputs were prefilled
+      expect(screen.getByLabelText(/client/i)).toHaveValue('c1');
+      expect(screen.getByLabelText(/currency/i)).toHaveValue('ETB');
+      expect(screen.getByDisplayValue('Custom ERP Development')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Server Migration & Setup')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Pay within 14 days')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('15')).toBeInTheDocument(); // taxRatePct
+
+      // Manual editing remains 100% responsive: modify description
+      const descInput = screen.getByDisplayValue('Custom ERP Development');
+      fireEvent.change(descInput, { target: { value: 'Custom ERP Development (Phase 1)' } });
+      expect(screen.getByDisplayValue('Custom ERP Development (Phase 1)')).toBeInTheDocument();
+    });
+
+    it('renders ambiguous client suggestions and allows one-click selection', async () => {
+      vi.spyOn(api, 'draftInvoiceWithAi').mockResolvedValue({
+        draft: {
+          clientId: null,
+          matchedClient: null,
+          suggestedClients: [
+            { id: 'c1', name: 'Acme Corporation', email: 'acme@example.com' },
+            { id: 'c2', name: 'Acme Logistics', email: 'logistics@acme.com' },
+          ],
+          suggestedClientName: 'Acme',
+          currency: 'ETB',
+          issueDate: '2026-11-02',
+          dueDate: '2026-11-16',
+          taxRateBps: 0,
+          taxRatePct: 0,
+          notes: '',
+          items: [
+            {
+              description: 'Consulting',
+              quantity: 1,
+              quantityMilli: 1000,
+              unitPrice: 5000,
+              unitPriceMinor: 500000,
+              lineTotalMinor: 500000,
+            },
+          ],
+          subtotalMinor: 500000,
+          taxMinor: 0,
+          totalMinor: 500000,
+        },
+      });
+
+      renderNewInvoice();
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(/e\.g\. Bill Acme Corp/i)).toBeInTheDocument();
+      });
+
+      const textarea = screen.getByPlaceholderText(/e\.g\. Bill Acme Corp/i);
+      fireEvent.change(textarea, { target: { value: 'Bill Acme 5000 ETB for consulting' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /generate draft/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Multiple client matches found for "Acme"/i)).toBeInTheDocument();
+      });
+
+      // Both suggestion buttons are rendered
+      const suggestionBtn1 = screen.getByRole('button', { name: /Acme Corporation \(acme@example\.com\)/i });
+      const suggestionBtn2 = screen.getByRole('button', { name: /Acme Logistics \(logistics@acme\.com\)/i });
+      expect(suggestionBtn1).toBeInTheDocument();
+      expect(suggestionBtn2).toBeInTheDocument();
+
+      // Click suggestion 1 to select client
+      fireEvent.click(suggestionBtn1);
+
+      // Selected client in select dropdown
+      expect(screen.getByLabelText(/client/i)).toHaveValue('c1');
+      // Suggestions banner dismissed
+      expect(screen.queryByText(/Multiple client matches found/i)).not.toBeInTheDocument();
+    });
+
+    it('renders suggested new client CTA and opens client modal with prefilled name', async () => {
+      vi.spyOn(api, 'draftInvoiceWithAi').mockResolvedValue({
+        draft: {
+          clientId: null,
+          matchedClient: null,
+          suggestedClients: [],
+          suggestedClientName: 'Starlight Tech',
+          currency: 'USD',
+          issueDate: '2026-11-02',
+          dueDate: '2026-11-16',
+          taxRateBps: 0,
+          taxRatePct: 0,
+          notes: '',
+          items: [
+            {
+              description: 'Software license',
+              quantity: 1,
+              quantityMilli: 1000,
+              unitPrice: 200,
+              unitPriceMinor: 20000,
+              lineTotalMinor: 20000,
+            },
+          ],
+          subtotalMinor: 20000,
+          taxMinor: 0,
+          totalMinor: 20000,
+        },
+      });
+
+      renderNewInvoice();
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(/e\.g\. Bill Acme Corp/i)).toBeInTheDocument();
+      });
+
+      const textarea = screen.getByPlaceholderText(/e\.g\. Bill Acme Corp/i);
+      fireEvent.change(textarea, { target: { value: 'Bill Starlight Tech 200 USD' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /generate draft/i }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Create "Starlight Tech"/i })).toBeInTheDocument();
+      });
+
+      const createClientBtn = screen.getByRole('button', { name: /Create "Starlight Tech"/i });
+      expect(createClientBtn).toBeInTheDocument();
+
+      // Click to open modal
+      fireEvent.click(createClientBtn);
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        // Client name input should be pre-filled with Starlight Tech
+        const nameInput = screen.getByLabelText(/client name/i);
+        expect(nameInput).toHaveValue('Starlight Tech');
+      });
+    });
+
+    it('displays error message and retry button when AI service returns an error', async () => {
+      const mockDraft = vi.spyOn(api, 'draftInvoiceWithAi').mockRejectedValueOnce(
+        new api.ApiException(503, {
+          code: 'AI_NOT_CONFIGURED',
+          message: 'AI invoice drafting is not configured. Please set LLM_API_KEY on the server.',
+        })
+      );
+
+      renderNewInvoice();
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(/e\.g\. Bill Acme Corp/i)).toBeInTheDocument();
+      });
+
+      const textarea = screen.getByPlaceholderText(/e\.g\. Bill Acme Corp/i);
+      fireEvent.change(textarea, { target: { value: 'Bill Acme 500 ETB' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /generate draft/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/AI invoice drafting is not configured/i)).toBeInTheDocument();
+      });
+
+      const retryBtn = screen.getByRole('button', { name: /retry/i });
+      expect(retryBtn).toBeInTheDocument();
+
+      // Second attempt succeeds
+      mockDraft.mockResolvedValueOnce({
+        draft: {
+          clientId: 'c1',
+          matchedClient: { id: 'c1', name: 'Acme Corporation', email: 'acme@example.com' },
+          suggestedClients: [],
+          suggestedClientName: null,
+          currency: 'ETB',
+          issueDate: '2026-11-02',
+          dueDate: '2026-11-16',
+          taxRateBps: 0,
+          taxRatePct: 0,
+          notes: '',
+          items: [{ description: 'Advisory', quantity: 1, quantityMilli: 1000, unitPrice: 500, unitPriceMinor: 50000, lineTotalMinor: 50000 }],
+          subtotalMinor: 50000,
+          taxMinor: 0,
+          totalMinor: 50000,
+        },
+      });
+
+      fireEvent.click(retryBtn);
+
+      await waitFor(() => {
+        expect(mockDraft).toHaveBeenCalledTimes(2);
+        expect(screen.getByText(/Draft generated with matched client/i)).toBeInTheDocument();
+      });
+    });
+  });
 });

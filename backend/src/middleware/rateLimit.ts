@@ -93,8 +93,17 @@ export const payRateLimiter = createRateLimiter({
   message: 'Too many payment attempts, please try again later.',
 });
 
+// 10 requests per 15 minutes per user for AI invoice drafting
+export const aiRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Too many AI drafting requests, please try again later.',
+  keyGenerator: (req) => req.user?.id || req.ip || req.socket?.remoteAddress || 'unknown',
+});
+
 export function resetRateLimits(): void {
   authRateLimiter.reset();
   publicRateLimiter.reset();
   payRateLimiter.reset();
+  aiRateLimiter.reset();
 }

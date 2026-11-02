@@ -649,5 +649,49 @@ export async function downloadPublicInvoicePdf(token: string, filename?: string)
   window.URL.revokeObjectURL(blobUrl);
 }
 
+export interface AiDraftItem {
+  description: string;
+  quantity: number;
+  quantityMilli: number;
+  unitPrice: number;
+  unitPriceMinor: number;
+  lineTotalMinor: number;
+}
+
+export interface AiDraftClientSuggestion {
+  id: string;
+  name: string;
+  email: string | null;
+}
+
+export interface AiDraftData {
+  clientId: string | null;
+  matchedClient: AiDraftClientSuggestion | null;
+  suggestedClients: AiDraftClientSuggestion[];
+  suggestedClientName: string | null;
+  currency: 'ETB' | 'USD';
+  issueDate: string;
+  dueDate: string;
+  taxRateBps: number;
+  taxRatePct: number;
+  notes: string;
+  items: AiDraftItem[];
+  subtotalMinor: number;
+  taxMinor: number;
+  totalMinor: number;
+}
+
+export interface AiDraftResponse {
+  draft: AiDraftData;
+}
+
+export async function draftInvoiceWithAi(prompt: string): Promise<AiDraftResponse> {
+  return apiRequest<AiDraftResponse>('/ai/draft-invoice', {
+    method: 'POST',
+    body: JSON.stringify({ prompt }),
+  });
+}
+
+
 
 
