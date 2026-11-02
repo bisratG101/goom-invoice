@@ -20,6 +20,7 @@ export const envSchema = z.object({
     .default(false)
     .transform((val) => val === true || val === 'true'),
   SIMULATED_WEBHOOK_SECRET: z.string().optional(),
+  LLM_PROVIDER: z.enum(['simulated', 'gemini']).default('simulated'),
   LLM_API_KEY: z.string().optional(),
   LLM_MONTHLY_LIMIT: z.coerce.number().int().positive().default(50),
   TRUST_PROXY: z.string().optional(),

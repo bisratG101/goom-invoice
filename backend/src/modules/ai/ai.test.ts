@@ -62,6 +62,7 @@ describeDb('AI Drafting Integration Tests (Live PostgreSQL & Gemini Mock)', { ti
     await dbHelper.cleanTables();
 
     // Set LLM_API_KEY for tests
+    (env as any).LLM_PROVIDER = 'gemini';
     (env as any).LLM_API_KEY = 'test-gemini-api-key';
     (env as any).LLM_MONTHLY_LIMIT = 50;
 
@@ -510,5 +511,33 @@ describeDb('AI Drafting Integration Tests (Live PostgreSQL & Gemini Mock)', { ti
 
     expect(res11.status).toBe(429);
     expect(res11.body.error.code).toBe('RATE_LIMIT_EXCEEDED');
+  });
+
+  it('generates high-fidelity mock draft when LLM_PROVIDER is simulated without API key', async () => {
+    (env as any).LLM_PROVIDER = 'simulated';
+    (env as any).LLM_API_KEY = '';
+
+    const res = await request(app)
+      .post('/api/v1/ai/draft-invoice')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        prompt:
+          'Bill Acme Ethiopia 15,000 ETB for website design and 5,000 ETB for SEO, due in 2 weeks with 15% VAT',
+      });
+
+    expect(res.status).toBe(200);
+    const draft = res.body.draft;
+    expect(draft.isSimulated).toBe(true);
+    expect(draft.provider).toBe('simulated');
+    expect(draft.clientId).toBe(clientAId);
+    expect(draft.matchedClient.name).toBe('Acme Ethiopia');
+    expect(draft.currency).toBe('ETB');
+    expect(draft.taxRatePct).toBe(15);
+    expect(draft.items).toHaveLength(2);
+    expect(draft.items[0].description).toBe('Website design');
+    expect(draft.items[0].unitPrice).toBe(15000);
+    expect(draft.items[1].description).toBe('SEO');
+    expect(draft.items[1].unitPrice).toBe(5000);
+    expect(draft.totalMinor).toBe(2300000);
   });
 });

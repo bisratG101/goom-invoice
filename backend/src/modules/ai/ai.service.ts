@@ -47,6 +47,8 @@ export interface ClientMatchResult {
 
 export interface AiDraftResponseData {
   draft: {
+    isSimulated: boolean;
+    provider: 'simulated' | 'gemini';
     clientId: string | null;
     matchedClient: { id: string; name: string; email: string | null } | null;
     suggestedClients: Array<{ id: string; name: string; email: string | null }>;
@@ -272,12 +274,140 @@ Return ONLY a valid JSON object adhering to this schema:
 }
 
 /**
+ * Generates a realistic mock AI invoice draft from natural language prompt.
+ * Operates completely offline with zero external API calls or billing dependencies.
+ * Validates output strictly with Zod rawAiDraftSchema.
+ */
+export function generateMockAiDraft(prompt: string): RawAiDraft {
+  const p = prompt.trim();
+  const lower = p.toLowerCase();
+
+  // 1. Currency: Default ETB unless USD or $ or dollar is mentioned
+  const currency: 'ETB' | 'USD' =
+    lower.includes('usd') || lower.includes('$') || lower.includes('dollar')
+      ? 'USD'
+      : 'ETB';
+
+  // 2. Tax Rate: Look for percentage or VAT keyword (default 15% for VAT in Ethiopia)
+  let taxRatePct = 0;
+  const taxPctMatch = lower.match(/(\d+(?:\.\d+)?)\s*%\s*(?:vat|tax)?/);
+  if (taxPctMatch) {
+    taxRatePct = parseFloat(taxPctMatch[1]);
+  } else if (lower.includes('vat') || lower.includes('tax')) {
+    taxRatePct = 15;
+  }
+  taxRatePct = Math.min(100, Math.max(0, taxRatePct));
+
+  // 3. Due Date: e.g. "due in 14 days", "in 2 weeks", "within 30 days"
+  let dueInDays = 14;
+  const dueMatch = lower.match(/(?:due\s+(?:in\s+)?|within\s+|in\s+|net\s+)(\d+)\s*(days?|weeks?|months?)?/i);
+  if (dueMatch) {
+    const val = parseInt(dueMatch[1], 10);
+    const unit = (dueMatch[2] || 'days').toLowerCase();
+    if (unit.startsWith('week')) {
+      dueInDays = val * 7;
+    } else if (unit.startsWith('month')) {
+      dueInDays = val * 30;
+    } else {
+      dueInDays = val;
+    }
+  }
+  dueInDays = Math.min(365, Math.max(0, dueInDays));
+
+  // 4. Client Name Extraction
+  let clientName: string | null = null;
+  const clientMatch = p.match(/(?:^|\b)(?:bill|invoice|charge|to)\s+([A-Z0-9][A-Za-z0-9&.' -]+?)(?=\s+(?:for|\$|\d|due|with|in\b|\bnet\b|at\b)|,|$)/i);
+  if (clientMatch) {
+    let extracted = clientMatch[1].trim();
+    extracted = extracted.replace(/\s+(?:for|due|with|in|at|and)$/i, '').trim();
+    if (extracted.length >= 2 && !/^(?:an|the|new|draft|customer|client|payment)$/i.test(extracted)) {
+      clientName = extracted;
+    }
+  }
+
+  // 5. Line items extraction
+  const items: Array<{ description: string; quantity: number; unitPrice: number }> = [];
+
+  // Pattern A: "X for Y and Z for W" (e.g. "15,000 ETB for website design and 5,000 ETB for SEO")
+  const forMatches = [...p.matchAll(/(\d+(?:,\d{3})*(?:\.\d{1,2})?)\s*(?:k\b|thousand\b)?\s*(?:etb|usd|\$)?\s+(?:for|toward)\s+([^,;]+?)(?=\s+and\s+\d|\s+with\s+\d|\s+due|\s*[,;]|$)/gi)];
+  if (forMatches.length > 0) {
+    for (const m of forMatches) {
+      const numStr = m[1].replace(/,/g, '');
+      let price = parseFloat(numStr);
+      if (m[0].toLowerCase().includes('k') || m[0].toLowerCase().includes('thousand')) {
+        price *= 1000;
+      }
+      let desc = m[2].trim().replace(/\s+(?:with|due|in|at).*$/i, '').trim();
+      desc = desc.replace(/^(?:and|&)\s+/i, '').trim();
+      if (!isNaN(price) && desc.length > 0) {
+        items.push({
+          description: desc.charAt(0).toUpperCase() + desc.slice(1),
+          quantity: 1,
+          unitPrice: Math.min(10000000, Math.max(0, price)),
+        });
+      }
+    }
+  }
+
+  // Pattern B: "<desc> <qty>k? and <desc2> <qty2>k?" (e.g. "website redesign 15k and 2 months SEO 2.5k")
+  if (items.length === 0) {
+    const descPriceMatches = [...p.matchAll(/(?:for\s+)?([A-Za-z0-9\s&'-]+?)\s+(\d+(?:,\d{3})*(?:\.\d{1,2})?)\s*(k\b|thousand\b)?\s*(?:etb|usd|\$)?(?=\s+and|\s+with|\s+due|[,;]|$)/gi)];
+    for (const m of descPriceMatches) {
+      let desc = m[1].trim().replace(/^(?:bill|invoice|charge)\s+/i, '');
+      if (clientName && desc.toLowerCase().startsWith(clientName.toLowerCase())) {
+        desc = desc.slice(clientName.length).trim();
+      }
+      desc = desc.replace(/^(?:for|to|and|&)\s+/i, '').trim();
+      let price = parseFloat(m[2].replace(/,/g, ''));
+      if (m[3] && (m[3].toLowerCase() === 'k' || m[3].toLowerCase() === 'thousand')) {
+        price *= 1000;
+      }
+      if (!isNaN(price) && desc.length >= 2) {
+        items.push({
+          description: desc.charAt(0).toUpperCase() + desc.slice(1),
+          quantity: 1,
+          unitPrice: Math.min(10000000, Math.max(0, price)),
+        });
+      }
+    }
+  }
+
+  // Fallback: Default reasonable line item based on prompt
+  if (items.length === 0) {
+    const numMatch = p.match(/\b(\d+(?:,\d{3})*(?:\.\d{1,2})?)\b/);
+    const price = numMatch ? parseFloat(numMatch[1].replace(/,/g, '')) : (currency === 'USD' ? 200 : 3000);
+    let desc = p
+      .replace(/^(?:bill|invoice|charge|create invoice for)\s+/i, '')
+      .replace(/\s+(?:due|with|in\s+\d|net\s+\d).*$/i, '')
+      .trim();
+    if (!desc || desc.length < 2) desc = 'Consulting Services';
+    items.push({
+      description: desc.slice(0, 100),
+      quantity: 1,
+      unitPrice: Math.min(10000000, Math.max(0, price)),
+    });
+  }
+
+  const raw = {
+    clientName,
+    currency,
+    dueInDays,
+    taxRatePct,
+    notes: '[Simulated AI Draft] Generated from natural language description in demo mode.',
+    items: items.slice(0, 50),
+  };
+
+  return rawAiDraftSchema.parse(raw);
+}
+
+/**
  * Builds the verified AI draft response using integer money arithmetic.
  */
 export function buildDraftResponse(
   rawDraft: RawAiDraft,
   matchResult: ClientMatchResult,
-  timezone: string
+  timezone: string,
+  provider: 'simulated' | 'gemini' = 'simulated'
 ): AiDraftResponseData {
   const issueDate = getTodayInTimezone(timezone);
 
@@ -322,6 +452,8 @@ export function buildDraftResponse(
 
   return {
     draft: {
+      isSimulated: provider === 'simulated',
+      provider,
       clientId: matchResult.matchedClient?.id || null,
       matchedClient: matchResult.matchedClient,
       suggestedClients: matchResult.suggestedClients,

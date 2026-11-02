@@ -665,6 +665,8 @@ export interface AiDraftClientSuggestion {
 }
 
 export interface AiDraftData {
+  isSimulated?: boolean;
+  provider?: 'simulated' | 'gemini';
   clientId: string | null;
   matchedClient: AiDraftClientSuggestion | null;
   suggestedClients: AiDraftClientSuggestion[];

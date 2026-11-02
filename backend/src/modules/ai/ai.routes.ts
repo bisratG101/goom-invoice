@@ -8,6 +8,7 @@ import {
   checkAndIncrementAiUsage,
   matchClient,
   callGemini,
+  generateMockAiDraft,
   buildDraftResponse,
 } from './ai.service';
 
@@ -19,8 +20,9 @@ aiRouter.post(
   requireOwner,
   aiRateLimiter,
   async (req: Request, res: Response): Promise<void> => {
-    // 1. Verify LLM configuration
-    if (!env.LLM_API_KEY || !env.LLM_API_KEY.trim()) {
+    // 1. Verify LLM configuration if explicitly configured for external Gemini
+    const isGemini = env.LLM_PROVIDER === 'gemini';
+    if (isGemini && (!env.LLM_API_KEY || !env.LLM_API_KEY.trim())) {
       res.status(503).json({
         error: {
           code: 'AI_NOT_CONFIGURED',
@@ -75,25 +77,34 @@ aiRouter.post(
         return;
       }
 
-      // 4. Call Gemini LLM with sanitized input
+      // 4. Generate draft via simulated provider or external Gemini
       let rawDraft;
-      try {
-        rawDraft = await callGemini(prompt, env.LLM_API_KEY);
-      } catch (geminiErr: any) {
-        res.status(502).json({
-          error: {
-            code: 'AI_SERVICE_ERROR',
-            message: geminiErr.message || 'Failed to generate invoice draft from AI service.',
-          },
-        });
-        return;
+      let provider: 'simulated' | 'gemini' = 'simulated';
+
+      if (isGemini && env.LLM_API_KEY && env.LLM_API_KEY.trim()) {
+        try {
+          rawDraft = await callGemini(prompt, env.LLM_API_KEY);
+          provider = 'gemini';
+        } catch (geminiErr: any) {
+          res.status(502).json({
+            error: {
+              code: 'AI_SERVICE_ERROR',
+              message: geminiErr.message || 'Failed to generate invoice draft from AI service.',
+            },
+          });
+          return;
+        }
+      } else {
+        // High-fidelity offline simulated AI draft generator
+        rawDraft = generateMockAiDraft(prompt);
+        provider = 'simulated';
       }
 
       // 5. Match client restricted strictly to business.id
       const matchResult = await matchClient(pool, business.id, rawDraft.clientName);
 
       // 6. Build verified response data using integer money calculations
-      const draftData = buildDraftResponse(rawDraft, matchResult, business.timezone);
+      const draftData = buildDraftResponse(rawDraft, matchResult, business.timezone, provider);
 
       res.status(200).json(draftData);
     } catch (err: any) {

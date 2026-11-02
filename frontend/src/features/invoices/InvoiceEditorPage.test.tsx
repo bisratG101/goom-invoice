@@ -416,7 +416,7 @@ describe('Prompt 15: Invoice Editor (/app/invoices/new, /app/invoices/:id/edit)'
 
       await waitFor(() => {
         expect(screen.getByText('Describe it')).toBeInTheDocument();
-        expect(screen.getByText('AI Draft')).toBeInTheDocument();
+        expect(screen.getByText(/AI Draft/i)).toBeInTheDocument();
         expect(screen.getByPlaceholderText(/e\.g\. Bill Acme Corp/i)).toBeInTheDocument();
         expect(screen.getByText('0 / 500')).toBeInTheDocument();
       });

@@ -215,9 +215,10 @@ The webhook ingestion pipeline (`POST /api/v1/webhooks/:provider`) guarantees fa
 ## 11. Test-Mode Disclosure
 
 Goom Invoice operates strictly in demonstration and testing mode:
-- Payments initiated through the **Simulated Provider** complete instantly within an in-memory test harness.
-- Payments configured with **Chapa** use sandbox API credentials (`CHASECK_TEST-`).
-- **No live financial accounts are touched, and no actual money moves.**
+- **Simulated Payment Gateway:** Payments initiated through the **Simulated Provider** complete instantly within an in-memory test harness.
+- **Payment Sandbox:** Payments configured with **Chapa** use sandbox API credentials (`CHASECK_TEST-`).
+- **Simulated AI Drafting:** Natural language invoice drafting in demo deployments runs via a deterministic, zero-cost offline **Simulated Provider** that parses line items, pricing, and client matches with zero external LLM API calls, no third-party dependencies, and no API keys required.
+- **Zero Real Money Movement:** No live financial accounts are touched, and no actual money moves.
 
 ---
 

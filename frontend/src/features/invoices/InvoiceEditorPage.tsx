@@ -236,6 +236,9 @@ export function InvoiceEditorPage() {
       if (draft.matchedClient) {
         msg = `Draft generated with matched client "${draft.matchedClient.name}". Review all details below.`;
       }
+      if (draft.isSimulated || draft.provider === 'simulated') {
+        msg += ' (Simulated demo mode).';
+      }
       setAiSuccessMessage(msg);
       addToast('success', 'AI Draft Generated', 'Invoice pre-filled from your description.');
     } catch (err: any) {
@@ -534,11 +537,11 @@ export function InvoiceEditorPage() {
                 <h2 className="text-base font-bold text-ink-900 flex items-center gap-2">
                   <span>Describe it</span>
                   <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300">
-                    AI Draft
+                    AI Draft (Demo Mode)
                   </span>
                 </h2>
                 <p className="text-xs text-ink-500 mt-0.5">
-                  Type a natural language prompt to generate an editable draft invoice. Never saves or sends automatically.
+                  Type a natural language prompt to generate an editable draft invoice. Runs in simulated demo mode. Never saves or sends automatically.
                 </p>
               </div>
             </div>

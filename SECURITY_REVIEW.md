@@ -118,6 +118,19 @@ All security findings and test requirements have been remediated, verified, and 
 - **Evidence:** Tested in `dbConstraints.test.ts` lines 139-168.
 - **Status:** **PASS**.
 
+### Vector 9: Natural Language AI Invoice Drafting Security & Isolation (Prompt 21)
+- **Mechanism:** Server-side AI drafting endpoint (`POST /api/v1/ai/draft-invoice`) with dual-provider architecture (`simulated` default for zero-cost, reliable demo mode; `gemini` via native `fetch`).
+- **Enforcement:**
+  - **Zero Key Leakage:** All LLM communication or simulation executes strictly server-side. No API keys are bundled or exposed to the frontend client.
+  - **Prompt Injection Defense:** User prompts are sanitized and isolated inside `<user_input>` blocks with explicit counter-instructions prohibiting guideline overrides.
+  - **Strict Schema Validation:** All draft outputs (simulated or LLM) are validated at runtime against `rawAiDraftSchema` using Zod before any business processing.
+  - **Safe Integer Money Conversion:** Output quantities and unit prices are validated within strict limits (quantity <= 1000, price <= 10,000,000.00) and computed using integer milli/minor BigInt half-up rules.
+  - **Tenant-Scoped Client Matching:** Client resolution queries are strictly isolated to `business_id = req.business.id`. Unambiguous exact matches auto-select; ambiguous or partial matches return safe suggestion arrays without silent selection.
+  - **Draft-Only Invariant:** Endpoint returns draft proposal payloads only; never inserts into `invoices`, never assigns numbers, and never initiates payment transactions.
+  - **Layered Rate & Quota Limits:** Per-user in-memory rate limiting (10 requests / 15 minutes) coupled with persistent database monthly quotas tracked in `ai_usage(business_id, period, request_count)` across server restarts.
+- **Evidence:** Tested in `ai.test.ts` (13 integration and unit tests passing against live PostgreSQL).
+- **Status:** **PASS**.
+
 ---
 
 ## 4. Testing Strategy Audit (`design.md` Section 11)
