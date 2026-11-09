@@ -157,3 +157,39 @@ Every security checklist item in `design.md` Section 10 and Section 11 has been 
 - 13 of 14 Section 10 items are verified **PASS**.
 - 1 Section 10 item (Item 7: Production Proxy Trust Topology) is marked **UNVERIFIED** pending live header inspection in the production Render deployment (Prompt 19).
 - All 11 Section 11 test categories are verified **PASS**, with user manual QA (all 7 steps) confirmed complete against `goom_dev`.
+
+---
+
+## 6. Dependency Security Audit & Compensating Controls
+
+### 6.1 Overview of Dependency Audit
+
+An audit across all workspaces (`/`, `backend/`, and `frontend/`) was conducted.
+- **Root**: 0 vulnerabilities.
+- **Frontend**: 0 vulnerabilities (`vitest@4.1.12`, `zod@4.6.7`).
+- **Backend**: 1 remaining vulnerability (`zod@3.25.76`, detailed below). Three previous vulnerabilities (`@vitest/mocker`, `tinypool`, `vitest`) were remediated by upgrading the backend test runner to `vitest@4.1.12`.
+
+### 6.2 Zod Constrained Collection Memory Exhaustion (GHSA-mrhx-c7xc-m3w5)
+
+- **Advisory ID:** GHSA-mrhx-c7xc-m3w5 (High Severity, CVSS 7.5)
+- **Affected Versions:** Zod `<4.6.6`
+- **Declared Dependency Range:** `^3.24.2` (in `backend/package.json`)
+- **Installed Version:** `zod@3.25.76`
+- **Nature of Vulnerability:** When validating oversized constrained array or collection schemas, Zod internal traversal loops can exhaust heap memory and cause Denial of Service (DoS) if subjected to arbitrarily large inputs.
+
+#### Compensating Controls & Defense in Depth
+1. **Network Buffer Cap:** `backend/src/app.ts` enforces `express.json({ limit: '100kb' })`. Any payload larger than 100 KB is immediately terminated at the transport level with HTTP 413 `PAYLOAD_TOO_LARGE` before invoking Zod.
+2. **Explicit Collection Bounds:** Every array schema in the backend (`createInvoiceSchema`, `updateInvoiceSchema`, `rawAiDraftSchema`) enforces an explicit `.max(50)` length constraint (`MONEY_CONSTANTS.MAX_LINE_ITEMS`).
+3. **Flat Schemas:** No nested arrays, sets, maps, or recursive object graphs exist in any request-handling schema.
+4. **Automated Regression Suite:** Automated tests in `backend/src/app.test.ts` verify that arrays with 51 items are rejected, arrays with 50 items are accepted, and bodies >100 KB abort with HTTP 413.
+
+#### Residual Risk & Ongoing Maintenance
+- **Residual Risk:** Residual risk is not zero. While transport buffering (100 KB) and strict array bounds (`max: 50`) prevent practical exploitation under current endpoints, residual risk remains if future development introduces unbounded collection schemas or expands payload limits without schema bounds.
+- **Strategic Recommendation:** Upgrade to Zod 4 as part of a scheduled major version refactor in a post-launch maintenance window, once downstream ORM and validation adapter libraries stabilize.
+
+### 6.3 Vitest Test Runner Upgrade (`vitest@4.1.12`)
+The backend test harness was upgraded from `vitest@3.2.7` to `vitest@4.1.12`. This remediated:
+- `tinypool <=2.1.1` (Critical, GHSA-5gmw-xhrv-c9v3 / GHSA-85c8-ppgw-ccpr) by eliminating the legacy worker dependency.
+- `@vitest/mocker <=4.1.11` (Moderate, GHSA-82fw-gwwq-j7x9 / GHSA-qxg6-89mg-rqv8).
+- Database mock constructor syntax in `backend/src/db/migrate.test.ts` was updated to standard constructor function syntax compatible with native ES class instantiation.
+- Aligned backend Vitest configuration with the frontend runner.

@@ -1,8 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
 import { app, createApp } from './app';
 import { envSchema } from './config/env';
 import { createRateLimiter } from './middleware/rateLimit';
+import { createInvoiceSchema, updateInvoiceSchema } from './modules/invoices/invoices.routes';
+import { rawAiDraftSchema } from './modules/ai/ai.service';
+import { MONEY_CONSTANTS } from './utils/money';
+
+vi.mock('./db/pool', () => ({
+  checkDbHealth: vi.fn().mockResolvedValue({ configured: true, connected: true }),
+}));
 
 describe('Backend Skeleton Tests', () => {
   describe('GET /health', () => {
@@ -166,6 +173,101 @@ describe('Backend Skeleton Tests', () => {
         .set('x-test-rate-limit', 'true')
         .set('X-Forwarded-For', '10.0.0.1, 198.51.100.43');
       expect(diffRealIpRes.status).toBe(200);
+    });
+  });
+
+  describe('Zod Array Collection Bounds Regression Tests (GHSA-mrhx-c7xc-m3w5)', () => {
+    it('proves createInvoiceSchema rejects item arrays exceeding MAX_LINE_ITEMS (50)', () => {
+      const oversizedItems = Array.from({ length: MONEY_CONSTANTS.MAX_LINE_ITEMS + 1 }, (_, i) => ({
+        description: `Item ${i + 1}`,
+        quantityMilli: 1000,
+        unitPriceMinor: 1000,
+      }));
+
+      const res = createInvoiceSchema.safeParse({
+        clientId: '00000000-0000-0000-0000-000000000000',
+        currency: 'ETB',
+        items: oversizedItems,
+      });
+
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        const itemError = res.error.issues.find((issue) => issue.path[0] === 'items');
+        expect(itemError).toBeDefined();
+        expect(itemError?.message).toContain(`Cannot exceed ${MONEY_CONSTANTS.MAX_LINE_ITEMS} line items`);
+      }
+    });
+
+    it('proves createInvoiceSchema accepts item arrays within the maximum boundary (50)', () => {
+      const validItems = Array.from({ length: MONEY_CONSTANTS.MAX_LINE_ITEMS }, (_, i) => ({
+        description: `Item ${i + 1}`,
+        quantityMilli: 1000,
+        unitPriceMinor: 1000,
+      }));
+
+      const res = createInvoiceSchema.safeParse({
+        clientId: '00000000-0000-0000-0000-000000000000',
+        currency: 'ETB',
+        items: validItems,
+      });
+
+      expect(res.success).toBe(true);
+    });
+
+    it('proves updateInvoiceSchema rejects item arrays exceeding MAX_LINE_ITEMS (50)', () => {
+      const oversizedItems = Array.from({ length: MONEY_CONSTANTS.MAX_LINE_ITEMS + 1 }, (_, i) => ({
+        description: `Item ${i + 1}`,
+        quantityMilli: 1000,
+        unitPriceMinor: 1000,
+      }));
+
+      const res = updateInvoiceSchema.safeParse({
+        items: oversizedItems,
+      });
+
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        const itemError = res.error.issues.find((issue) => issue.path[0] === 'items');
+        expect(itemError).toBeDefined();
+        expect(itemError?.message).toContain(`Cannot exceed ${MONEY_CONSTANTS.MAX_LINE_ITEMS} line items`);
+      }
+    });
+
+    it('proves rawAiDraftSchema rejects AI-generated item arrays exceeding MAX_LINE_ITEMS (50)', () => {
+      const oversizedAiItems = Array.from({ length: MONEY_CONSTANTS.MAX_LINE_ITEMS + 1 }, (_, i) => ({
+        description: `Service item ${i + 1}`,
+        quantity: 1,
+        unitPrice: 100,
+      }));
+
+      const res = rawAiDraftSchema.safeParse({
+        clientName: 'Acme Corp',
+        currency: 'ETB',
+        items: oversizedAiItems,
+      });
+
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        const itemError = res.error.issues.find((issue) => issue.path[0] === 'items');
+        expect(itemError).toBeDefined();
+        expect(itemError?.message).toContain(`At most ${MONEY_CONSTANTS.MAX_LINE_ITEMS} items allowed`);
+      }
+    });
+
+    it('proves rawAiDraftSchema accepts AI-generated item arrays within the boundary (50)', () => {
+      const validAiItems = Array.from({ length: MONEY_CONSTANTS.MAX_LINE_ITEMS }, (_, i) => ({
+        description: `Service item ${i + 1}`,
+        quantity: 1,
+        unitPrice: 100,
+      }));
+
+      const res = rawAiDraftSchema.safeParse({
+        clientName: 'Acme Corp',
+        currency: 'ETB',
+        items: validAiItems,
+      });
+
+      expect(res.success).toBe(true);
     });
   });
 });

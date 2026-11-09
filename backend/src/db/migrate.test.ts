@@ -10,10 +10,12 @@ const mClient = {
 
 vi.mock('pg', () => {
   return {
-    Pool: vi.fn().mockImplementation(() => ({
-      connect: vi.fn(() => Promise.resolve(mClient)),
-      end: vi.fn(() => Promise.resolve()),
-    })),
+    Pool: vi.fn().mockImplementation(function () {
+      return {
+        connect: vi.fn(() => Promise.resolve(mClient)),
+        end: vi.fn(() => Promise.resolve()),
+      };
+    }),
   };
 });
 

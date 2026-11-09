@@ -82,7 +82,7 @@ function normalizeItem(raw: z.infer<typeof invoiceItemInputSchema>): {
 }
 
 // Schemas for creating and updating invoices
-const createInvoiceSchema = z.object({
+export const createInvoiceSchema = z.object({
   client_id: z.string().uuid('Invalid client_id UUID').optional(),
   clientId: z.string().uuid('Invalid clientId UUID').optional(),
   currency: z.enum(['ETB', 'USD']).optional(),
@@ -96,7 +96,7 @@ const createInvoiceSchema = z.object({
   items: z.array(invoiceItemInputSchema).max(MONEY_CONSTANTS.MAX_LINE_ITEMS, `Cannot exceed ${MONEY_CONSTANTS.MAX_LINE_ITEMS} line items`).default([]),
 });
 
-const updateInvoiceSchema = z.object({
+export const updateInvoiceSchema = z.object({
   client_id: z.string().uuid('Invalid client_id UUID').optional(),
   clientId: z.string().uuid('Invalid clientId UUID').optional(),
   currency: z.enum(['ETB', 'USD']).optional(),
