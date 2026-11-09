@@ -303,8 +303,11 @@ describeDb('PostgreSQL Schema & Constraint Tests (Prompt 3)', () => {
   });
 
   it('migration is idempotent: running twice does not reapply or fail', async () => {
+    const parsed = new URL(testDbUrl);
+    const dbName = parsed.pathname.replace(/^\//, '').toLowerCase();
     const result = await runMigrations({
       connectionString: testDbUrl,
+      expectedDatabaseName: dbName,
       logger: () => {},
     });
     expect(result.applied).toHaveLength(0);
@@ -322,9 +325,12 @@ describeDb('PostgreSQL Schema & Constraint Tests (Prompt 3)', () => {
       client.release();
     }
 
+    const parsed = new URL(testDbUrl);
+    const dbName = parsed.pathname.replace(/^\//, '').toLowerCase();
     await expect(
       runMigrations({
         connectionString: testDbUrl,
+        expectedDatabaseName: dbName,
         logger: () => {},
       })
     ).rejects.toThrowError(/checksum mismatch for already-applied file/);

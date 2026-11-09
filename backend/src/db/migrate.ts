@@ -15,6 +15,13 @@ export interface MigrationResult {
   alreadyApplied: string[];
 }
 
+export interface MigrationOptions {
+  connectionString?: string;
+  migrationsDir?: string;
+  logger?: (msg: string) => void;
+  expectedDatabaseName?: string;
+}
+
 export function computeChecksum(content: string): string {
   return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
 }
@@ -33,11 +40,7 @@ export function getDatabaseSslConfig(databaseUrl: string) {
   return true;
 }
 
-export async function runMigrations(options?: {
-  connectionString?: string;
-  migrationsDir?: string;
-  logger?: (msg: string) => void;
-}): Promise<MigrationResult> {
+export async function runMigrations(options?: MigrationOptions): Promise<MigrationResult> {
   const log = options?.logger || ((msg: string) => console.log(`[migrate] ${msg}`));
   const dbUrl = options?.connectionString || process.env.DATABASE_URL;
 
@@ -61,6 +64,52 @@ export async function runMigrations(options?: {
   let lockAcquired = false;
 
   try {
+    // 0. Verify database identity guard before acquiring lock or applying migrations
+    // MUST happen before advisory lock acquisition, schema creation, or any DDL.
+    const identityRes = await client.query<{ current_db: string }>(
+      'SELECT current_database() AS current_db'
+    );
+    const actualDb = (identityRes.rows[0]?.current_db || '').trim().toLowerCase();
+
+    // 0a. Reject production database names unconditionally, regardless of whether EXPECTED_DATABASE_NAME is supplied
+    const prohibitedTokens = ['prod', 'production', 'live', 'commercial'];
+    const isProhibited = prohibitedTokens.some((tok) => {
+      if (tok === 'prod') {
+        return /(^|[_\-.0-9])prod([_\-.0-9]|$)/i.test(actualDb);
+      }
+      return actualDb.includes(tok);
+    });
+
+    if (isProhibited) {
+      throw new Error(
+        `FATAL SAFETY CHECK: Connected database "${actualDb}" is identified as a production database. Migration refused.`
+      );
+    }
+
+    // 0b. EXPECTED_DATABASE_NAME must be explicitly supplied and non-empty
+    const expectedDb = (
+      options?.expectedDatabaseName ||
+      process.env.EXPECTED_DATABASE_NAME ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+
+    if (!expectedDb) {
+      throw new Error(
+        'FATAL SAFETY CHECK: EXPECTED_DATABASE_NAME is required to run migrations. Migration refused.'
+      );
+    }
+
+    // 0c. Verify current_database() matches EXPECTED_DATABASE_NAME exactly
+    if (actualDb !== expectedDb) {
+      throw new Error(
+        `FATAL SAFETY CHECK: Connected database "${actualDb}" does not match required EXPECTED_DATABASE_NAME "${expectedDb}". Migration refused.`
+      );
+    }
+
+    log(`Verified database identity: "${actualDb}" matches EXPECTED_DATABASE_NAME "${expectedDb}".`);
+
     // 1. Acquire advisory lock with bounded retry (max 5 seconds)
     log('Acquiring migration advisory lock...');
     const lockDeadline = Date.now() + 5000;

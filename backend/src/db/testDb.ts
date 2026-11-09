@@ -270,8 +270,12 @@ export function createTestDbHelper(testUrl?: string): TestDbHelper {
         client.release();
       }
 
+      const parsedUrl = new URL(verifiedUrl);
+      const testDbName = parsedUrl.pathname.replace(/^\//, '').toLowerCase();
+
       await runMigrations({
         connectionString: verifiedUrl,
+        expectedDatabaseName: testDbName,
         logger: () => {}, // quiet during automated test resets
       });
       resetRateLimits();
