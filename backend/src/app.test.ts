@@ -111,6 +111,38 @@ describe('Backend Skeleton Tests', () => {
         expect(secretIssue?.message).toContain('at least 32 characters');
       }
     });
+
+    it('transforms localhost APP_BASE_URL to canonical https://goom-invoice.vercel.app in production', () => {
+      const prodEnv = {
+        NODE_ENV: 'production',
+        JWT_SECRET: '01234567890123456789012345678901',
+        CORS_ORIGIN: 'https://goom-invoice.vercel.app',
+        APP_BASE_URL: 'https://localhost:5173',
+        API_BASE_URL: 'https://goom-invoice-api.onrender.com',
+      };
+      const result = envSchema.safeParse(prodEnv);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.APP_BASE_URL).toBe('https://goom-invoice.vercel.app');
+        expect(result.data.APP_BASE_URL).not.toContain('localhost');
+      }
+    });
+
+    it('preserves localhost APP_BASE_URL in local development mode', () => {
+      const devEnv = {
+        NODE_ENV: 'development',
+        JWT_SECRET: '01234567890123456789012345678901',
+        CORS_ORIGIN: 'http://localhost:5173',
+        APP_BASE_URL: 'http://localhost:5173',
+        API_BASE_URL: 'http://localhost:4000',
+      };
+      const result = envSchema.safeParse(devEnv);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.APP_BASE_URL).toBe('http://localhost:5173');
+        expect(result.data.APP_BASE_URL).toContain('localhost');
+      }
+    });
   });
 
   describe('Reverse Proxy Trust & Rate Limiting Behavior', () => {

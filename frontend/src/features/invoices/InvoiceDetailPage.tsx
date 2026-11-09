@@ -30,6 +30,7 @@ import {
   ApiException,
 } from '../../lib/api';
 import { formatMoney, formatMilliToQuantity } from '../../lib/money';
+import { getPublicInvoiceUrl } from '../../lib/urls';
 
 export function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -192,11 +193,16 @@ export function InvoiceDetailPage() {
   const displayStatus: InvoiceStatus =
     invoice.status === 'sent' && invoice.isOverdue ? 'overdue' : invoice.status;
 
+  // Canonical public invoice URL ensuring production domain & development compatibility
+  const publicInvoiceUrl = invoice
+    ? getPublicInvoiceUrl(invoice.publicToken, invoice.publicUrl)
+    : '';
+
   // Plain URL share intents (no sensitive information)
-  const shareText = `Invoice ${invoice.displayNumber || ''} from your provider: ${invoice.publicUrl}`;
+  const shareText = `Invoice ${invoice.displayNumber || ''} from your provider: ${publicInvoiceUrl}`;
   const whatsappShareUrl = `https://wa.me/?text=${encodeURIComponent(shareText)}`;
   const telegramShareUrl = `https://t.me/share/url?url=${encodeURIComponent(
-    invoice.publicUrl
+    publicInvoiceUrl
   )}&text=${encodeURIComponent(`Invoice ${invoice.displayNumber || ''}`)}`;
 
   return (
@@ -345,7 +351,7 @@ export function InvoiceDetailPage() {
               <span>Public Payment Link</span>
             </h2>
             <a
-              href={invoice.publicUrl}
+              href={publicInvoiceUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs font-semibold text-blue-700 hover:text-blue-800 flex items-center gap-1 hover:underline"
@@ -363,11 +369,11 @@ export function InvoiceDetailPage() {
             <input
               type="text"
               readOnly
-              value={invoice.publicUrl}
+              value={publicInvoiceUrl}
               className="w-full bg-surface-2 border border-line rounded-md px-3 py-2 text-xs font-mono text-ink-700 truncate select-all focus:outline-none"
             />
             <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
-              <CopyButton textToCopy={invoice.publicUrl} label="Copy link" className="w-full sm:w-auto" />
+              <CopyButton textToCopy={publicInvoiceUrl} label="Copy link" className="w-full sm:w-auto" />
               <a
                 href={whatsappShareUrl}
                 target="_blank"

@@ -3,28 +3,43 @@ import { z } from 'zod';
 
 dotenv.config();
 
-export const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  PORT: z.coerce.number().int().positive().default(4000),
-  DATABASE_URL: z.string().optional().transform((val) => (val && val.trim() !== '' ? val : undefined)),
-  JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
-  JWT_EXPIRES_IN: z.string().default('1h'),
-  CORS_ORIGIN: z.string().min(1, 'CORS_ORIGIN is required'),
-  APP_BASE_URL: z.string().url('APP_BASE_URL must be a valid URL'),
-  API_BASE_URL: z.string().url('API_BASE_URL must be a valid URL'),
-  PAYMENT_PROVIDERS: z.string().default('chapa,simulated'),
-  CHAPA_SECRET_KEY: z.string().optional(),
-  CHAPA_WEBHOOK_SECRET: z.string().optional(),
-  DEMO_MODE: z
-    .union([z.boolean(), z.enum(['true', 'false'])])
-    .default(false)
-    .transform((val) => val === true || val === 'true'),
-  SIMULATED_WEBHOOK_SECRET: z.string().optional(),
-  LLM_PROVIDER: z.enum(['simulated', 'gemini']).default('simulated'),
-  LLM_API_KEY: z.string().optional(),
-  LLM_MONTHLY_LIMIT: z.coerce.number().int().positive().default(50),
-  TRUST_PROXY: z.string().optional(),
-});
+export const envSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+    PORT: z.coerce.number().int().positive().default(4000),
+    DATABASE_URL: z.string().optional().transform((val) => (val && val.trim() !== '' ? val : undefined)),
+    JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
+    JWT_EXPIRES_IN: z.string().default('1h'),
+    CORS_ORIGIN: z.string().min(1, 'CORS_ORIGIN is required'),
+    APP_BASE_URL: z.string().url('APP_BASE_URL must be a valid URL'),
+    API_BASE_URL: z.string().url('API_BASE_URL must be a valid URL'),
+    PAYMENT_PROVIDERS: z.string().default('chapa,simulated'),
+    CHAPA_SECRET_KEY: z.string().optional(),
+    CHAPA_WEBHOOK_SECRET: z.string().optional(),
+    DEMO_MODE: z
+      .union([z.boolean(), z.enum(['true', 'false'])])
+      .default(false)
+      .transform((val) => val === true || val === 'true'),
+    SIMULATED_WEBHOOK_SECRET: z.string().optional(),
+    LLM_PROVIDER: z.enum(['simulated', 'gemini']).default('simulated'),
+    LLM_API_KEY: z.string().optional(),
+    LLM_MONTHLY_LIMIT: z.coerce.number().int().positive().default(50),
+    TRUST_PROXY: z.string().optional(),
+  })
+  .transform((data) => {
+    // In production, if APP_BASE_URL is configured as a localhost placeholder,
+    // safely route to canonical production URL (https://goom-invoice.vercel.app)
+    if (data.NODE_ENV === 'production' && /localhost|127\.0\.0\.1/i.test(data.APP_BASE_URL)) {
+      return {
+        ...data,
+        APP_BASE_URL: 'https://goom-invoice.vercel.app',
+      };
+    }
+    return {
+      ...data,
+      APP_BASE_URL: data.APP_BASE_URL.replace(/\/+$/, ''),
+    };
+  });
 
 export type Env = z.infer<typeof envSchema>;
 

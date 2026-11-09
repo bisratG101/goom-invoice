@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { InvoiceDetailPage } from './InvoiceDetailPage';
 import { ThemeProvider } from '../../context/ThemeContext';
 import * as api from '../../lib/api';
+import * as urls from '../../lib/urls';
 
 describe('Prompt 15: Invoice Detail Page (/app/invoices/:id)', () => {
   let queryClient: QueryClient;
@@ -309,6 +310,70 @@ describe('Prompt 15: Invoice Detail Page (/app/invoices/:id)', () => {
 
     await waitFor(() => {
       expect(pdfSpy).toHaveBeenCalledWith('inv-sent-1', 'INV-2026-0042.pdf');
+    });
+  });
+
+  describe('Canonical Public Invoice URL Generation (Production vs Development)', () => {
+    it('proves production generates goom-invoice.vercel.app URLs for input, preview, copy, WhatsApp, and Telegram', async () => {
+      vi.spyOn(urls, 'getPublicInvoiceUrl').mockImplementation(
+        (token) => `https://goom-invoice.vercel.app/i/${token}`
+      );
+      vi.spyOn(api, 'fetchInvoice').mockResolvedValue(sampleSentInvoice);
+
+      renderInvoiceDetail('inv-sent-1');
+
+      await waitFor(() => {
+        expect(screen.getByText('Public Payment Link')).toBeInTheDocument();
+      });
+
+      const expectedProdUrl = 'https://goom-invoice.vercel.app/i/tok_sent42';
+
+      // 1. Text input displays canonical production URL
+      const inputEl = screen.getByDisplayValue(expectedProdUrl) as HTMLInputElement;
+      expect(inputEl).toBeInTheDocument();
+      expect(inputEl.value).toBe(expectedProdUrl);
+      expect(inputEl.value).not.toContain('localhost');
+
+      // 2. Preview payer view link points to canonical production URL
+      const previewLink = screen.getByRole('link', { name: /preview payer view/i });
+      expect(previewLink).toHaveAttribute('href', expectedProdUrl);
+      expect(previewLink.getAttribute('href')).not.toContain('localhost');
+
+      // 3. WhatsApp share intent uses canonical production URL
+      const whatsappLink = screen.getByTitle('Share via WhatsApp');
+      const whatsappHref = whatsappLink.getAttribute('href') || '';
+      expect(whatsappHref).toContain(encodeURIComponent(expectedProdUrl));
+      expect(whatsappHref).toContain('wa.me');
+      expect(whatsappHref).not.toContain('localhost');
+
+      // 4. Telegram share intent uses canonical production URL
+      const telegramLink = screen.getByTitle('Share via Telegram');
+      const telegramHref = telegramLink.getAttribute('href') || '';
+      expect(telegramHref).toContain(encodeURIComponent(expectedProdUrl));
+      expect(telegramHref).toContain('t.me');
+      expect(telegramHref).not.toContain('localhost');
+    });
+
+    it('proves local development generates and preserves localhost URLs', async () => {
+      vi.spyOn(urls, 'getPublicInvoiceUrl').mockImplementation(
+        (token, backendUrl) => backendUrl || `http://localhost:5173/i/${token}`
+      );
+      vi.spyOn(api, 'fetchInvoice').mockResolvedValue(sampleSentInvoice);
+
+      renderInvoiceDetail('inv-sent-1');
+
+      await waitFor(() => {
+        expect(screen.getByText('Public Payment Link')).toBeInTheDocument();
+      });
+
+      const expectedDevUrl = 'http://localhost:5173/pay/tok_sent42';
+
+      // Input, WhatsApp and Telegram use localhost in dev
+      expect(screen.getByDisplayValue(expectedDevUrl)).toBeInTheDocument();
+      const whatsappLink = screen.getByTitle('Share via WhatsApp');
+      expect(whatsappLink.getAttribute('href')).toContain('localhost');
+      const telegramLink = screen.getByTitle('Share via Telegram');
+      expect(telegramLink.getAttribute('href')).toContain('localhost');
     });
   });
 });
